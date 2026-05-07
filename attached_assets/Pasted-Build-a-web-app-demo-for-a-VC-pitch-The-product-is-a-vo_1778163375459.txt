@@ -1,0 +1,21 @@
+Build a web app demo for a VC pitch. The product is a voice-first copilot for delivery drivers with a collaborative shared knowledge layer (parking heatmap + cross-driver road alerts) and a back-office dispatch dashboard.
+
+One page, four panels visible at once so a VC audience sees the whole loop:
+Panel 1 — Driver A (voice-first cockpit). Defaults to a near-empty screen: just a pulsing mic indicator, a current-parcel card, and a state badge. No map by default — this is the point. A mic button uses the Web Speech API to transcribe what the driver says. Send the transcript to the Anthropic API (Claude Haiku is fine and cheap) with a system prompt that classifies the message into one of: road_closed, parking_issue, customer_not_home, delivery_complete, request_map, general_question, plus extracted entities (street name, parcel reference). Show the live transcription, then the structured interpretation, then the spoken response via Speech Synthesis API.
+
+Panel 2 — Driver A's adaptive map (hidden by default). Slides in only when one of three things happens: the driver says "show me the map," the simulated state changes to Approaching, or a road-closure reroute is accepted. The "map" is a styled SVG of a small neighborhood with a route line and several colored circles representing the parking heatmap — darker green = more colleague confirmations, lighter green = fewer, gray = unknown. When Driver A parks (simulated via button), pop a voice prompt: "Looks like a solid spot — want me to save it for your colleagues?" and on yes, darken that circle live. This visualizes the network effect.
+
+Panel 3 — Dispatch Dashboard. Mock list of 6 parcels split across Driver A and Driver B with address, customer, ETA, status. A real-time event log on the side. When Driver A reports something via voice, the relevant parcel updates immediately and downstream ETAs recalculate (hardcode the deltas: parking +10min, road closed +15min and reroute, customer not home → reschedule to end of route).
+
+Panel 4 — Driver B (the cross-driver magic). Shows Driver B's current parcel and ETA. When Driver A reports a road closure that affects Driver B's route, Panel 4 fires a proactive voice alert via Speech Synthesis: "A colleague just reported Maple Street is closed. Want me to show an alternate route?" with Yes/No buttons. On yes, Panel 4's mini-map opens with the new route highlighted and ETA updates. This is the demo's climax — make sure it's bulletproof.
+
+Simulation controls (small bar at top). Per driver: state buttons Driving / Approaching / Parked. Plus a "Reset Demo" button that restores initial state, and a "Run Scripted Demo" button that auto-walks through the three demo moments above so you can pitch hands-free if needed.
+
+Mock data. Hardcode parcels, addresses, driver assignments, and the heatmap seed (8–12 parking spots with varying confirmation counts). No database. State lives in React.
+
+Tech stack. React + Tailwind + Vite. Tiny Node/Express backend just to proxy the Anthropic API call so the key isn't exposed. Web Speech API in, Speech Synthesis API out. Single-page, no routing.
+
+Out of scope. Real GPS, real maps, authentication, persistence, retry-on-misunderstanding, walking state, music/calls/POIs, dispatcher push messages, more than two drivers, mobile-native packaging.
+
+Visual style. Light theme. Minimal, precise, "operations console" vibe — not a consumer app.
+The wow path: Driver A says "the road is closed on Maple Street" → dashboard updates and shows the event → Driver B's voice alert fires within ~3 seconds → Driver B taps yes → Panel 4 map opens with the alternate route. Polish this end-to-end before anything else.
