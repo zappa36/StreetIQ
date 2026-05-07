@@ -13,6 +13,7 @@ interface Parcel {
   customer: string;
   driver: "Driver A" | "Driver B";
   eta: string;
+  originalEta: string;
   status: ParcelStatus;
 }
 
@@ -83,12 +84,12 @@ type Action =
 
 // --- Mock Data ---
 const INITIAL_PARCELS: Parcel[] = [
-  { id: "P001", address: "12 Oak St", customer: "Alice Chen", driver: "Driver A", eta: "14:20", status: "pending" },
-  { id: "P002", address: "34 Maple Ave", customer: "Bob Torres", driver: "Driver A", eta: "14:35", status: "pending" },
-  { id: "P003", address: "56 Pine Rd", customer: "Carol Wu", driver: "Driver A", eta: "14:50", status: "pending" },
-  { id: "P004", address: "78 Maple St", customer: "David Kim", driver: "Driver B", eta: "14:25", status: "pending" },
-  { id: "P005", address: "91 Elm Blvd", customer: "Emma Park", driver: "Driver B", eta: "14:40", status: "pending" },
-  { id: "P006", address: "103 Cedar Ln", customer: "Frank Li", driver: "Driver B", eta: "14:55", status: "pending" },
+  { id: "P001", address: "12 Oak St", customer: "Alice Chen", driver: "Driver A", eta: "14:20", originalEta: "14:20", status: "pending" },
+  { id: "P002", address: "34 Maple Ave", customer: "Bob Torres", driver: "Driver A", eta: "14:35", originalEta: "14:35", status: "pending" },
+  { id: "P003", address: "56 Pine Rd", customer: "Carol Wu", driver: "Driver A", eta: "14:50", originalEta: "14:50", status: "pending" },
+  { id: "P004", address: "78 Maple St", customer: "David Kim", driver: "Driver B", eta: "14:25", originalEta: "14:25", status: "pending" },
+  { id: "P005", address: "91 Elm Blvd", customer: "Emma Park", driver: "Driver B", eta: "14:40", originalEta: "14:40", status: "pending" },
+  { id: "P006", address: "103 Cedar Ln", customer: "Frank Li", driver: "Driver B", eta: "14:55", originalEta: "14:55", status: "pending" },
 ];
 
 const INITIAL_SPOTS: ParkingSpot[] = [
@@ -855,7 +856,16 @@ function PanelThree() {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-right font-mono font-medium text-slate-800">
-                    {p.eta}
+                    {p.eta !== p.originalEta ? (
+                      <div className="flex flex-col items-end leading-tight">
+                        <span className="text-orange-600">{p.eta}</span>
+                        <span className="text-[10px] text-slate-400 line-through font-normal" data-testid={`original-eta-${p.id}`}>
+                          was {p.originalEta}
+                        </span>
+                      </div>
+                    ) : (
+                      <span>{p.eta}</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-center">
                     <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider border ${getStatusColor(p.status)}`}>
