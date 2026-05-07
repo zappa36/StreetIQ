@@ -269,6 +269,21 @@ export default function App() {
 
   useEffect(() => () => clearDemoTimers(), []);
 
+  // Proactive announcement when Driver A transitions into "Approaching"
+  const prevDriverAStateRef = useRef(state.driverAState);
+  useEffect(() => {
+    if (prevDriverAStateRef.current !== "Approaching" && state.driverAState === "Approaching") {
+      const nextStop = stateRef.current.parcels.find(
+        (p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed")
+      );
+      const where = nextStop ? ` to ${nextStop.address}` : "";
+      const msg = `You're getting close${where}. Want me to open the navigation app and show some parking hotspots nearby?`;
+      dispatch({ type: "ADD_EVENT", payload: `FleetMind → Driver A: approach prompt (parking hotspots)` });
+      playTtsAlert(msg);
+    }
+    prevDriverAStateRef.current = state.driverAState;
+  }, [state.driverAState]);
+
   const playTtsAlert = async (text: string) => {
     try {
       const ttsRes = await fetch("/api/tts", {
