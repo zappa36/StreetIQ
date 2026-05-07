@@ -5,18 +5,26 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
+  MutationFunction,
   QueryFunction,
   QueryKey,
+  UseMutationOptions,
+  UseMutationResult,
   UseQueryOptions,
   UseQueryResult,
 } from "@tanstack/react-query";
 
-import type { HealthStatus } from "./api.schemas";
+import type {
+  ClassifyRequest,
+  ClassifyResponse,
+  HealthStatus,
+  TtsRequest,
+} from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
-import type { ErrorType } from "../custom-fetch";
+import type { ErrorType, BodyType } from "../custom-fetch";
 
 type AwaitedInput<T> = PromiseLike<T> | T;
 
@@ -99,3 +107,177 @@ export function useHealthCheck<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * Classifies a driver's spoken transcript into an intent category using OpenAI
+ * @summary Classify driver voice transcript
+ */
+export const getClassifyTranscriptUrl = () => {
+  return `/api/classify`;
+};
+
+export const classifyTranscript = async (
+  classifyRequest: ClassifyRequest,
+  options?: RequestInit,
+): Promise<ClassifyResponse> => {
+  return customFetch<ClassifyResponse>(getClassifyTranscriptUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(classifyRequest),
+  });
+};
+
+export const getClassifyTranscriptMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof classifyTranscript>>,
+    TError,
+    { data: BodyType<ClassifyRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof classifyTranscript>>,
+  TError,
+  { data: BodyType<ClassifyRequest> },
+  TContext
+> => {
+  const mutationKey = ["classifyTranscript"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof classifyTranscript>>,
+    { data: BodyType<ClassifyRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return classifyTranscript(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ClassifyTranscriptMutationResult = NonNullable<
+  Awaited<ReturnType<typeof classifyTranscript>>
+>;
+export type ClassifyTranscriptMutationBody = BodyType<ClassifyRequest>;
+export type ClassifyTranscriptMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Classify driver voice transcript
+ */
+export const useClassifyTranscript = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof classifyTranscript>>,
+    TError,
+    { data: BodyType<ClassifyRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof classifyTranscript>>,
+  TError,
+  { data: BodyType<ClassifyRequest> },
+  TContext
+> => {
+  return useMutation(getClassifyTranscriptMutationOptions(options));
+};
+
+/**
+ * Converts text to speech audio using OpenAI TTS
+ * @summary Text-to-speech synthesis
+ */
+export const getTextToSpeechUrl = () => {
+  return `/api/tts`;
+};
+
+export const textToSpeech = async (
+  ttsRequest: TtsRequest,
+  options?: RequestInit,
+): Promise<Blob> => {
+  return customFetch<Blob>(getTextToSpeechUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(ttsRequest),
+  });
+};
+
+export const getTextToSpeechMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof textToSpeech>>,
+    TError,
+    { data: BodyType<TtsRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof textToSpeech>>,
+  TError,
+  { data: BodyType<TtsRequest> },
+  TContext
+> => {
+  const mutationKey = ["textToSpeech"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof textToSpeech>>,
+    { data: BodyType<TtsRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return textToSpeech(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type TextToSpeechMutationResult = NonNullable<
+  Awaited<ReturnType<typeof textToSpeech>>
+>;
+export type TextToSpeechMutationBody = BodyType<TtsRequest>;
+export type TextToSpeechMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Text-to-speech synthesis
+ */
+export const useTextToSpeech = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof textToSpeech>>,
+    TError,
+    { data: BodyType<TtsRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof textToSpeech>>,
+  TError,
+  { data: BodyType<TtsRequest> },
+  TContext
+> => {
+  return useMutation(getTextToSpeechMutationOptions(options));
+};

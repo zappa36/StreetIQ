@@ -8,3 +8,38 @@
 export interface HealthStatus {
   status: string;
 }
+
+export interface ClassifyRequest {
+  /** The driver's spoken transcript to classify */
+  transcript: string;
+}
+
+export type ClassifyResponseIntent =
+  (typeof ClassifyResponseIntent)[keyof typeof ClassifyResponseIntent];
+
+export const ClassifyResponseIntent = {
+  road_closed: "road_closed",
+  parking_issue: "parking_issue",
+  customer_not_home: "customer_not_home",
+  delivery_complete: "delivery_complete",
+  request_map: "request_map",
+  general: "general",
+} as const;
+
+export interface ClassifyResponse {
+  intent: ClassifyResponseIntent;
+  /** Extracted street name, customer name, or parcel ID */
+  entity: string;
+  /**
+   * @minimum 0
+   * @maximum 1
+   */
+  confidence: number;
+}
+
+export interface TtsRequest {
+  /** The text to synthesize */
+  text: string;
+  /** The voice to use (alloy, nova, shimmer) */
+  voice?: string;
+}

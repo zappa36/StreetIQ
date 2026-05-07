@@ -14,3 +14,48 @@ import * as zod from "zod";
 export const HealthCheckResponse = zod.object({
   status: zod.string(),
 });
+
+/**
+ * Classifies a driver's spoken transcript into an intent category using OpenAI
+ * @summary Classify driver voice transcript
+ */
+export const ClassifyTranscriptBody = zod.object({
+  transcript: zod
+    .string()
+    .describe("The driver's spoken transcript to classify"),
+});
+
+export const classifyTranscriptResponseConfidenceMin = 0;
+export const classifyTranscriptResponseConfidenceMax = 1;
+
+export const ClassifyTranscriptResponse = zod.object({
+  intent: zod.enum([
+    "road_closed",
+    "parking_issue",
+    "customer_not_home",
+    "delivery_complete",
+    "request_map",
+    "general",
+  ]),
+  entity: zod
+    .string()
+    .describe("Extracted street name, customer name, or parcel ID"),
+  confidence: zod
+    .number()
+    .min(classifyTranscriptResponseConfidenceMin)
+    .max(classifyTranscriptResponseConfidenceMax),
+});
+
+/**
+ * Converts text to speech audio using OpenAI TTS
+ * @summary Text-to-speech synthesis
+ */
+export const textToSpeechBodyVoiceDefault = `nova`;
+
+export const TextToSpeechBody = zod.object({
+  text: zod.string().describe("The text to synthesize"),
+  voice: zod
+    .string()
+    .default(textToSpeechBodyVoiceDefault)
+    .describe("The voice to use (alloy, nova, shimmer)"),
+});

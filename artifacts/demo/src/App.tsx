@@ -37,6 +37,7 @@ interface AppState {
   events: EventLog[];
   mapVisible: boolean;
   roadClosed: boolean;
+  driverARerouteOverlayDismissed: boolean;
   driverBAlertVisible: boolean;
   driverBRerouteAccepted: boolean | null;
   heatmapSpots: ParkingSpot[];
@@ -53,6 +54,7 @@ type Action =
   | { type: "ADD_EVENT"; payload: string }
   | { type: "SET_MAP_VISIBLE"; payload: boolean }
   | { type: "SET_ROAD_CLOSED"; payload: boolean }
+  | { type: "DISMISS_A_REROUTE_OVERLAY" }
   | { type: "SET_B_ALERT_VISIBLE"; payload: boolean }
   | { type: "SET_B_REROUTE_ACCEPTED"; payload: boolean }
   | { type: "INCREMENT_PARKING"; payload: string }
@@ -93,6 +95,7 @@ const initialState: AppState = {
   events: [],
   mapVisible: false,
   roadClosed: false,
+  driverARerouteOverlayDismissed: false,
   driverBAlertVisible: false,
   driverBRerouteAccepted: null,
   heatmapSpots: INITIAL_SPOTS,
@@ -138,7 +141,9 @@ function reducer(state: AppState, action: Action): AppState {
     case "SET_MAP_VISIBLE":
       return { ...state, mapVisible: action.payload };
     case "SET_ROAD_CLOSED":
-      return { ...state, roadClosed: action.payload };
+      return { ...state, roadClosed: action.payload, driverARerouteOverlayDismissed: false };
+    case "DISMISS_A_REROUTE_OVERLAY":
+      return { ...state, driverARerouteOverlayDismissed: true };
     case "SET_B_ALERT_VISIBLE":
       return { ...state, driverBAlertVisible: action.payload };
     case "SET_B_REROUTE_ACCEPTED":
@@ -368,14 +373,14 @@ function PanelOne() {
     dispatch({ type: "SET_LISTENING", payload: true });
     
     try {
-      // @ts-ignore - web speech api
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (SpeechRecognition) {
-        const recognition = new SpeechRecognition();
+      const SpeechRecognitionCtor = (window as Window & { SpeechRecognition?: typeof SpeechRecognition; webkitSpeechRecognition?: typeof SpeechRecognition }).SpeechRecognition
+        ?? (window as Window & { webkitSpeechRecognition?: typeof SpeechRecognition }).webkitSpeechRecognition;
+      if (SpeechRecognitionCtor) {
+        const recognition = new SpeechRecognitionCtor();
         recognition.continuous = false;
         recognition.interimResults = false;
         
-        recognition.onresult = async (event: any) => {
+        recognition.onresult = async (event: SpeechRecognitionEvent) => {
           const transcript = event.results[0][0].transcript;
           dispatch({ type: "SET_TRANSCRIPT", payload: transcript });
           await classifyTranscript(transcript);
@@ -503,7 +508,7 @@ function PanelOne() {
 
 // --- Panel 2: Adaptive Map ---
 function PanelTwo() {
-  const { state } = useDemo();
+  const { state, dispatch } = useDemo();
 
   return (
     <div className="flex-1 relative overflow-hidden bg-[#eef2f6]">
@@ -562,15 +567,31 @@ function PanelTwo() {
                 <circle cx={state.roadClosed ? 120 : 120} cy={state.roadClosed ? 50 : 130} r="6" fill="#1e293b" />
               </svg>
               
-              {state.roadClosed && (
+              {state.roadClosed && !state.driverARerouteOverlayDismissed && (
                 <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-white px-4 py-3 rounded-lg shadow-lg border border-orange-200 flex items-center gap-4">
                   <div className="flex flex-col">
                     <span className="font-bold text-slate-800 text-sm">Reroute Active</span>
                     <span className="text-xs text-slate-500">+15 min delay</span>
                   </div>
                   <div className="flex gap-2">
-                    <Button size="sm" variant="outline" className="h-7 text-xs">Dismiss</Button>
-                    <Button size="sm" className="h-7 text-xs bg-orange-500 hover:bg-orange-600 text-white">Accept Route</Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      onClick={() => dispatch({ type: "DISMISS_A_REROUTE_OVERLAY" })}
+                    >
+                      Dismiss
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="h-7 text-xs bg-orange-500 hover:bg-orange-600 text-white"
+                      onClick={() => {
+                        dispatch({ type: "SET_MAP_VISIBLE", payload: true });
+                        dispatch({ type: "DISMISS_A_REROUTE_OVERLAY" });
+                      }}
+                    >
+                      Accept Route
+                    </Button>
                   </div>
                 </div>
               )}

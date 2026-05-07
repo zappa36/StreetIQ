@@ -6,4 +6,8 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from "./classifyRequest";
+export * from "./classifyResponse";
+export * from "./classifyResponseIntent";
 export * from "./healthStatus";
+export * from "./ttsRequest";

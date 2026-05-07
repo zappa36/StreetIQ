@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: voice
+    description: Voice classification and TTS operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,45 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /classify:
+    post:
+      operationId: classifyTranscript
+      tags: [voice]
+      summary: Classify driver voice transcript
+      description: Classifies a driver's spoken transcript into an intent category using OpenAI
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClassifyRequest"
+      responses:
+        "200":
+          description: Classification result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClassifyResponse"
+  /tts:
+    post:
+      operationId: textToSpeech
+      tags: [voice]
+      summary: Text-to-speech synthesis
+      description: Converts text to speech audio using OpenAI TTS
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TtsRequest"
+      responses:
+        "200":
+          description: Audio file (mp3)
+          content:
+            audio/mpeg:
+              schema:
+                type: string
+                format: binary
 components:
   schemas:
     HealthStatus:
@@ -33,4 +74,41 @@ components:
           type: string
       required:
         - status
-
+    ClassifyRequest:
+      type: object
+      properties:
+        transcript:
+          type: string
+          description: The driver's spoken transcript to classify
+      required:
+        - transcript
+    ClassifyResponse:
+      type: object
+      properties:
+        intent:
+          type: string
+          enum: [road_closed, parking_issue, customer_not_home, delivery_complete, request_map, general]
+        entity:
+          type: string
+          description: Extracted street name, customer name, or parcel ID
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+      required:
+        - intent
+        - entity
+        - confidence
+    TtsRequest:
+      type: object
+      properties:
+        text:
+          type: string
+          description: The text to synthesize
+        voice:
+          type: string
+          description: The voice to use (alloy, nova, shimmer)
+          default: nova
+      required:
+        - text
