@@ -333,22 +333,25 @@ export default function App() {
   };
 
   const resolveDelayParcel = (ref: string | undefined): Parcel | null => {
-    const aParcels = stateRef.current.parcels.filter(
-      (p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed")
-    );
-    if (aParcels.length === 0) return null;
+    // Driver A's full route (all statuses) — used for ordinal matching so
+    // "delivery 3" always means the 3rd stop on the route, even if earlier
+    // ones are already delivered or in transit.
+    const aRoute = stateRef.current.parcels.filter((p) => p.driver === "Driver A");
+    const aOpen = aRoute.filter((p) => p.status === "pending" || p.status === "delayed");
+    if (aRoute.length === 0) return null;
     const isAtStop = stateRef.current.driverAState === "Parked" || stateRef.current.driverAState === "Approaching";
     const cleaned = (ref ?? "").toLowerCase().trim();
 
-    // Empty / "next" / "the next one" → next upcoming parcel
+    // Empty / "next" / "the next one" → next upcoming parcel (open ones only)
     if (!cleaned || /\b(next|upcoming|following)\b/.test(cleaned)) {
-      return isAtStop ? (aParcels[1] ?? aParcels[0]) : aParcels[0];
+      if (aOpen.length === 0) return null;
+      return isAtStop ? (aOpen[1] ?? aOpen[0]) : aOpen[0];
     }
     // Exact parcel id (P001, P002, ...)
     const idMatch = cleaned.match(/p\s*0*([1-9]\d*)/);
     if (idMatch) {
       const id = `P${idMatch[1].padStart(3, "0")}`;
-      const byId = aParcels.find((p) => p.id === id);
+      const byId = aRoute.find((p) => p.id === id);
       if (byId) return byId;
     }
     // Ordinal: "delivery 3", "stop number 2", "the third", "second"
@@ -361,19 +364,26 @@ export default function App() {
         if (cleaned.includes(w)) { n = v; break; }
       }
     }
-    if (n !== null && n >= 1 && n <= aParcels.length) return aParcels[n - 1];
+    if (n !== null && n >= 1) {
+      // Try parcel-id-by-number first (P00N) — most reliable across statuses.
+      const byNumberId = aRoute.find((p) => p.id === `P${String(n).padStart(3, "0")}`);
+      if (byNumberId) return byNumberId;
+      // Otherwise treat n as the Nth stop on the full route.
+      if (n <= aRoute.length) return aRoute[n - 1];
+    }
 
     // Street name match (e.g., "maple")
-    const byStreet = aParcels.find((p) => cleaned && p.address.toLowerCase().includes(cleaned));
+    const byStreet = aRoute.find((p) => cleaned && p.address.toLowerCase().includes(cleaned));
     if (byStreet) return byStreet;
-    const byStreetWord = aParcels.find((p) => {
+    const byStreetWord = aRoute.find((p) => {
       const words = cleaned.split(/\s+/);
       return words.some((w) => w.length > 2 && p.address.toLowerCase().includes(w));
     });
     if (byStreetWord) return byStreetWord;
 
     // Fallback: next upcoming parcel
-    return isAtStop ? (aParcels[1] ?? aParcels[0]) : aParcels[0];
+    if (aOpen.length === 0) return null;
+    return isAtStop ? (aOpen[1] ?? aOpen[0]) : aOpen[0];
   };
 
   const processIntent = (intent: string, entity: string, extras: DelayExtras = {}) => {
@@ -614,14 +624,24 @@ function PanelOne() {
     }
   };
 
-  // Route transcript to the right handler depending on whether a follow-up is pending
+  // Route transcript to the right handler depending on whether a follow-up is pending.
+  // If the user starts a NEW delay/intent while a follow-up is still open, treat
+  // it as a fresh classification rather than forcing it into the open follow-up.
+  const looksLikeFreshIntent = (text: string) => {
+    const t = text.toLowerCase();
+    return /\b(delay|late|behind|delivery|parcel|stop|road|closed|blocked|parking|park|customer|not home|delivered|map|navigate|naviga)\b/.test(t)
+      && /\b(next|another|again|also|more|delivery\s*\d|parcel\s*\d|stop\s*\d|p0*\d+)\b/.test(t);
+  };
+
   const routeTranscript = async (text: string) => {
     const pending = followUpRef.current;
-    if (pending && pending.type === "delay_details") {
+    if (pending && pending.type === "delay_details" && !looksLikeFreshIntent(text)) {
       await handleDelayDetails(text, pending);
-    } else if (pending && pending.type === "confirm_navigation") {
+    } else if (pending && pending.type === "confirm_navigation" && !looksLikeFreshIntent(text)) {
       handleNavigationAnswer(text);
     } else {
+      // Either no pending, or the user clearly started a new request — clear and classify fresh.
+      if (pending) dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
       await classifyTranscript(text);
     }
   };
