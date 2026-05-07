@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useReducer, useEffect, useRef } from "react";
-import { Mic, MicOff, MapPin, AlertTriangle, CheckCircle, Package, Truck, Clock, Navigation } from "lucide-react";
+import { Mic, MicOff, MapPin, AlertTriangle, CheckCircle, Package, Truck, Clock, Navigation, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 
@@ -41,6 +41,7 @@ interface AppState {
   parcels: Parcel[];
   events: EventLog[];
   mapVisible: boolean;
+  mapOpening: boolean;
   roadClosed: boolean;
   driverARerouteOverlayDismissed: boolean;
   driverBAlertVisible: boolean;
@@ -59,6 +60,7 @@ type Action =
   | { type: "SET_DRIVER_B_STATE"; payload: DriverState }
   | { type: "ADD_EVENT"; payload: string }
   | { type: "SET_MAP_VISIBLE"; payload: boolean }
+  | { type: "SET_MAP_OPENING"; payload: boolean }
   | { type: "SET_ROAD_CLOSED"; payload: boolean }
   | { type: "DISMISS_A_REROUTE_OVERLAY" }
   | { type: "ROAD_CLOSED_IMPACT" }
@@ -108,6 +110,7 @@ const initialState: AppState = {
   parcels: INITIAL_PARCELS,
   events: [],
   mapVisible: false,
+  mapOpening: false,
   roadClosed: false,
   driverARerouteOverlayDismissed: false,
   driverBAlertVisible: false,
@@ -152,7 +155,9 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, events: [newEvent, ...state.events].slice(0, 20) };
     }
     case "SET_MAP_VISIBLE":
-      return { ...state, mapVisible: action.payload };
+      return { ...state, mapVisible: action.payload, mapOpening: action.payload ? false : state.mapOpening };
+    case "SET_MAP_OPENING":
+      return { ...state, mapOpening: action.payload };
     case "SET_ROAD_CLOSED":
       return { ...state, roadClosed: action.payload, driverARerouteOverlayDismissed: false };
     case "DISMISS_A_REROUTE_OVERLAY":
@@ -186,6 +191,7 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         mapVisible: false,
+  mapOpening: false,
         driverAState: "Driving",
         parcels: state.parcels.map((p) =>
           p.id === "P001" ? { ...p, status: "delivered" as ParcelStatus } : p
@@ -554,19 +560,51 @@ function PanelOne() {
     }
   };
 
+  const speakConfirmation = async (text: string) => {
+    try {
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, voice: "nova" }),
+      });
+      if (res.ok) {
+        const blob = await res.blob();
+        const audio = new Audio(URL.createObjectURL(blob));
+        audio.play().catch(() => {});
+        return;
+      }
+    } catch {
+      // fall through
+    }
+    if ("speechSynthesis" in window) {
+      const u = new SpeechSynthesisUtterance(text);
+      window.speechSynthesis.speak(u);
+    }
+  };
+
+  const acceptNavigation = () => {
+    dispatch({ type: "SET_INTENT", payload: { intent: "confirm_yes", entity: "" } });
+    dispatch({ type: "SET_MAP_OPENING", payload: true });
+    dispatch({ type: "ADD_EVENT", payload: `Driver A: confirmed → opening navigation…` });
+    speakConfirmation("Opening the map and pulling up parking hotspots near you.");
+    setTimeout(() => {
+      dispatch({ type: "SET_MAP_VISIBLE", payload: true });
+      dispatch({ type: "ADD_EVENT", payload: `Map opened — parking hotspots loaded` });
+      dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
+    }, 1800);
+  };
+
+  const declineNavigation = () => {
+    dispatch({ type: "SET_INTENT", payload: { intent: "confirm_no", entity: "" } });
+    dispatch({ type: "ADD_EVENT", payload: `Driver A: declined navigation prompt` });
+    dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
+  };
+
   const handleNavigationAnswer = (text: string) => {
     const lower = text.toLowerCase().trim();
     const yes = /\b(yes|yeah|yep|yup|sure|ok(?:ay)?|please|do it|open( it)?|show|sounds good|go ahead)\b/.test(lower);
-    const no = /\b(no|nope|nah|not now|skip|don'?t|negative|cancel)\b/.test(lower);
-    const accepted = yes || (!no && false); // require explicit yes; ambiguous → treat as no
-    dispatch({ type: "SET_INTENT", payload: { intent: accepted ? "confirm_yes" : "confirm_no", entity: "" } });
-    if (accepted) {
-      dispatch({ type: "SET_MAP_VISIBLE", payload: true });
-      dispatch({ type: "ADD_EVENT", payload: `Driver A: confirmed → opening map + parking hotspots` });
-    } else {
-      dispatch({ type: "ADD_EVENT", payload: `Driver A: declined navigation prompt` });
-    }
-    dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
+    if (yes) acceptNavigation();
+    else declineNavigation();
   };
 
   const handleDelayDetails = async (text: string, pending: Extract<PendingFollowUp, { type: "delay_details" }>) => {
@@ -692,31 +730,29 @@ function PanelOne() {
           </div>
 
           {state.pendingFollowUp.type === "confirm_navigation" ? (
-            <div className="mt-3 flex gap-2">
-              <button
-                onClick={() => {
-                  dispatch({ type: "SET_MAP_VISIBLE", payload: true });
-                  dispatch({ type: "ADD_EVENT", payload: `Driver A: confirmed → opening map + parking hotspots` });
-                  dispatch({ type: "SET_INTENT", payload: { intent: "confirm_yes", entity: "" } });
-                  dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
-                }}
-                className="flex-1 px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium"
-                data-testid="btn-followup-yes"
-              >
-                Yes, open map
-              </button>
-              <button
-                onClick={() => {
-                  dispatch({ type: "ADD_EVENT", payload: `Driver A: declined navigation prompt` });
-                  dispatch({ type: "SET_INTENT", payload: { intent: "confirm_no", entity: "" } });
-                  dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
-                }}
-                className="flex-1 px-3 py-1.5 rounded bg-white hover:bg-slate-50 text-slate-700 text-sm font-medium border border-slate-300"
-                data-testid="btn-followup-no"
-              >
-                No thanks
-              </button>
-            </div>
+            state.mapOpening ? (
+              <div className="mt-3 flex items-center gap-2 text-emerald-700 text-sm font-medium" data-testid="map-opening">
+                <Loader2 size={14} className="animate-spin" />
+                Opening map and parking hotspots…
+              </div>
+            ) : (
+              <div className="mt-3 flex gap-2">
+                <button
+                  onClick={acceptNavigation}
+                  className="flex-1 px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium"
+                  data-testid="btn-followup-yes"
+                >
+                  Yes, open map
+                </button>
+                <button
+                  onClick={declineNavigation}
+                  className="flex-1 px-3 py-1.5 rounded bg-white hover:bg-slate-50 text-slate-700 text-sm font-medium border border-slate-300"
+                  data-testid="btn-followup-no"
+                >
+                  No thanks
+                </button>
+              </div>
+            )
           ) : (
             <button
               onClick={() => dispatch({ type: "CLEAR_PENDING_FOLLOWUP" })}
