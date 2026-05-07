@@ -30,6 +30,13 @@ interface ParkingSpot {
   label: string;
 }
 
+interface PendingFollowUp {
+  type: "delay_details";
+  parcelId: string;
+  parcelLabel: string;
+  question: string;
+}
+
 interface AppState {
   driverAState: DriverState;
   driverBState: DriverState;
@@ -46,6 +53,7 @@ interface AppState {
   lastEntity: string;
   isListening: boolean;
   isRunningDemo: boolean;
+  pendingFollowUp: PendingFollowUp | null;
 }
 
 type Action =
@@ -68,6 +76,9 @@ type Action =
   | { type: "SET_LISTENING"; payload: boolean }
   | { type: "SET_RUNNING_DEMO"; payload: boolean }
   | { type: "UPDATE_PARCELS"; payload: Parcel[] }
+  | { type: "SET_PENDING_FOLLOWUP"; payload: PendingFollowUp }
+  | { type: "CLEAR_PENDING_FOLLOWUP" }
+  | { type: "APPLY_DELAY"; payload: { parcelId: string; minutes: number; reason: string } }
   | { type: "RESET_DEMO" };
 
 // --- Mock Data ---
@@ -109,6 +120,7 @@ const initialState: AppState = {
   lastEntity: "",
   isListening: false,
   isRunningDemo: false,
+  pendingFollowUp: null,
 };
 
 // --- Helper ---
@@ -212,6 +224,20 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, isRunningDemo: action.payload };
     case "UPDATE_PARCELS":
       return { ...state, parcels: action.payload };
+    case "SET_PENDING_FOLLOWUP":
+      return { ...state, pendingFollowUp: action.payload };
+    case "CLEAR_PENDING_FOLLOWUP":
+      return { ...state, pendingFollowUp: null };
+    case "APPLY_DELAY":
+      return {
+        ...state,
+        pendingFollowUp: null,
+        parcels: state.parcels.map((p) =>
+          p.id === action.payload.parcelId
+            ? { ...p, status: "delayed" as ParcelStatus, eta: addMinutes(p.eta, action.payload.minutes) }
+            : p
+        ),
+      };
     case "RESET_DEMO":
       return initialState;
     default:
@@ -232,6 +258,8 @@ function useDemo() {
 export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const demoTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const stateRef = useRef(state);
+  useEffect(() => { stateRef.current = state; }, [state]);
 
   const clearDemoTimers = () => {
     demoTimers.current.forEach(clearTimeout);
@@ -293,6 +321,27 @@ export default function App() {
     } else if (intent === "request_map") {
       dispatch({ type: "ADD_EVENT", payload: `Driver A: request_map` });
       dispatch({ type: "SET_MAP_VISIBLE", payload: true });
+
+    } else if (intent === "delay_reported") {
+      // Find the next pending parcel for Driver A.
+      // If parked at a current stop, "next" = the one after it; otherwise = the upcoming one.
+      const aParcels = stateRef.current.parcels.filter(
+        (p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed")
+      );
+      const isAtStop = stateRef.current.driverAState === "Parked" || stateRef.current.driverAState === "Approaching";
+      const nextParcel = isAtStop ? (aParcels[1] ?? aParcels[0]) : aParcels[0];
+      if (nextParcel) {
+        const label = `${nextParcel.id} — ${nextParcel.address} (${nextParcel.customer})`;
+        const question = `How long will the delay be, and what happened?`;
+        dispatch({
+          type: "SET_PENDING_FOLLOWUP",
+          payload: { type: "delay_details", parcelId: nextParcel.id, parcelLabel: label, question },
+        });
+        dispatch({ type: "ADD_EVENT", payload: `Driver A: delay_reported for next stop ${nextParcel.id} (${nextParcel.address})` });
+        playTtsAlert(`Got it. For your next stop at ${nextParcel.address}, ${question}`);
+      } else {
+        dispatch({ type: "ADD_EVENT", payload: `Driver A: delay_reported but no upcoming parcel found` });
+      }
     }
   };
 
@@ -426,12 +475,14 @@ export default function App() {
 // --- Panel 1: Voice Cockpit ---
 function PanelOne() {
   const { state, dispatch, processIntent } = useDemo();
-  
+  const followUpRef = useRef(state.pendingFollowUp);
+  useEffect(() => { followUpRef.current = state.pendingFollowUp; }, [state.pendingFollowUp]);
+
   const handleMicClick = async () => {
     if (state.isListening) return;
-    
+
     dispatch({ type: "SET_LISTENING", payload: true });
-    
+
     try {
       const SpeechRecognitionCtor = (window as Window & { SpeechRecognition?: typeof SpeechRecognition; webkitSpeechRecognition?: typeof SpeechRecognition }).SpeechRecognition
         ?? (window as Window & { webkitSpeechRecognition?: typeof SpeechRecognition }).webkitSpeechRecognition;
@@ -439,31 +490,90 @@ function PanelOne() {
         const recognition = new SpeechRecognitionCtor();
         recognition.continuous = false;
         recognition.interimResults = false;
-        
+
         recognition.onresult = async (event: SpeechRecognitionEvent) => {
           const transcript = event.results[0][0].transcript;
           dispatch({ type: "SET_TRANSCRIPT", payload: transcript });
-          await classifyTranscript(transcript);
+          await routeTranscript(transcript);
           dispatch({ type: "SET_LISTENING", payload: false });
         };
-        
+
         recognition.onerror = () => {
           dispatch({ type: "SET_LISTENING", payload: false });
         };
-        
+
         recognition.start();
       } else {
         // Fallback for browsers without speech API in this demo context
         setTimeout(async () => {
-          const fallback = "road is closed on Maple Street";
+          const fallback = followUpRef.current
+            ? "about 15 minutes, heavy traffic"
+            : "I will be delayed for the next parcel";
           dispatch({ type: "SET_TRANSCRIPT", payload: fallback });
-          await classifyTranscript(fallback);
+          await routeTranscript(fallback);
           dispatch({ type: "SET_LISTENING", payload: false });
         }, 2000);
       }
     } catch (e) {
       dispatch({ type: "SET_LISTENING", payload: false });
     }
+  };
+
+  // Route transcript to the right handler depending on whether a follow-up is pending
+  const routeTranscript = async (text: string) => {
+    const pending = followUpRef.current;
+    if (pending && pending.type === "delay_details") {
+      await handleDelayDetails(text, pending);
+    } else {
+      await classifyTranscript(text);
+    }
+  };
+
+  const handleDelayDetails = async (text: string, pending: PendingFollowUp) => {
+    let minutes = 10;
+    let reason = "unspecified";
+    try {
+      const res = await fetch("/api/classify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transcript: text, mode: "delay_details" }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Number.isFinite(data.minutes)) minutes = Math.max(1, Math.round(data.minutes));
+        if (typeof data.reason === "string" && data.reason.length > 0) reason = data.reason;
+      } else {
+        const fb = parseDelayKeywords(text);
+        minutes = fb.minutes;
+        reason = fb.reason;
+      }
+    } catch {
+      const fb = parseDelayKeywords(text);
+      minutes = fb.minutes;
+      reason = fb.reason;
+    }
+
+    dispatch({ type: "SET_INTENT", payload: { intent: "delay_details", entity: `+${minutes}min · ${reason}` } });
+    dispatch({ type: "APPLY_DELAY", payload: { parcelId: pending.parcelId, minutes, reason } });
+    dispatch({
+      type: "ADD_EVENT",
+      payload: `Driver A: ${pending.parcelId} delayed +${minutes}min — ${reason}`,
+    });
+  };
+
+  const parseDelayKeywords = (text: string): { minutes: number; reason: string } => {
+    const lower = text.toLowerCase();
+    const minMatch = lower.match(/(\d+)\s*(?:minute|min)/);
+    const hourMatch = lower.match(/(\d+)\s*hour/);
+    let minutes = 10;
+    if (minMatch) minutes = Math.max(1, parseInt(minMatch[1], 10));
+    else if (hourMatch) minutes = Math.max(1, parseInt(hourMatch[1], 10) * 60);
+    let reason = "unspecified";
+    if (lower.includes("traffic")) reason = "heavy traffic";
+    else if (lower.includes("tire") || lower.includes("flat")) reason = "flat tire";
+    else if (lower.includes("accident")) reason = "accident on route";
+    else if (lower.includes("customer")) reason = "long customer interaction";
+    return { minutes, reason };
   };
 
   const classifyTranscript = async (text: string) => {
@@ -481,10 +591,11 @@ function PanelOne() {
     } catch (e) {
       // fallback
     }
-    
+
     // Keyword fallback
     const lower = text.toLowerCase();
     if (lower.includes("closed") || lower.includes("blocked")) processIntent("road_closed", "Maple Street");
+    else if (lower.includes("delay") || lower.includes("late") || lower.includes("behind")) processIntent("delay_reported", "");
     else if (lower.includes("parking") || lower.includes("park")) processIntent("parking_issue", "");
     else if (lower.includes("not home") || lower.includes("nobody")) processIntent("customer_not_home", "");
     else if (lower.includes("delivered") || lower.includes("done")) processIntent("delivery_complete", "");
@@ -522,6 +633,31 @@ function PanelOne() {
         </div>
       )}
 
+      {/* Pending Follow-Up Prompt */}
+      {state.pendingFollowUp && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-6 w-full max-w-sm bg-amber-50 border border-amber-200 rounded-xl shadow-sm p-4"
+          data-testid="followup-prompt"
+        >
+          <div className="text-xs uppercase tracking-wider text-amber-700 font-semibold mb-1 flex items-center gap-1.5">
+            <AlertTriangle size={12} /> FleetMind asks
+          </div>
+          <div className="text-slate-900 font-medium">{state.pendingFollowUp.question}</div>
+          <div className="text-xs text-slate-600 mt-2 font-mono">
+            Re: {state.pendingFollowUp.parcelLabel}
+          </div>
+          <button
+            onClick={() => dispatch({ type: "CLEAR_PENDING_FOLLOWUP" })}
+            className="mt-2 text-xs text-amber-700 hover:text-amber-900 underline"
+            data-testid="btn-cancel-followup"
+          >
+            cancel
+          </button>
+        </motion.div>
+      )}
+
       {/* Mic Button */}
       <div className="relative mb-12">
         {state.isListening && (
@@ -535,7 +671,11 @@ function PanelOne() {
           data-testid="btn-mic"
           onClick={handleMicClick}
           className={`relative z-10 w-24 h-24 rounded-full flex items-center justify-center shadow-lg transition-all
-            ${state.isListening ? 'bg-blue-600 text-white scale-95 shadow-inner' : 'bg-white text-blue-600 hover:bg-blue-50 border-2 border-blue-100'}`}
+            ${state.isListening
+              ? 'bg-blue-600 text-white scale-95 shadow-inner'
+              : state.pendingFollowUp
+                ? 'bg-white text-amber-600 hover:bg-amber-50 border-2 border-amber-200'
+                : 'bg-white text-blue-600 hover:bg-blue-50 border-2 border-blue-100'}`}
         >
           <Mic size={36} strokeWidth={2.5} />
         </button>
