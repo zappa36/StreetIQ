@@ -7,10 +7,22 @@
  */
 import type { ClassifyResponseIntent } from "./classifyResponseIntent";
 
+/**
+ * Response shape depends on the request `mode`. In `intent` mode, `intent`/`entity`
+are populated. In `delay_details` mode, `minutes`/`reason` are populated.
+
+ */
 export interface ClassifyResponse {
-  intent: ClassifyResponseIntent;
+  intent?: ClassifyResponseIntent;
   /** Extracted street name, customer name, or parcel ID */
-  entity: string;
+  entity?: string;
+  /**
+   * Estimated delay in minutes (delay_details mode only)
+   * @minimum 1
+   */
+  minutes?: number;
+  /** Short phrase describing the cause of the delay (delay_details mode only) */
+  reason?: string;
   /**
    * @minimum 0
    * @maximum 1

@@ -5,8 +5,14 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { ClassifyRequestMode } from "./classifyRequestMode";
 
 export interface ClassifyRequest {
   /** The driver's spoken transcript to classify */
   transcript: string;
+  /** Classification mode. `intent` (default) returns an intent label and entity.
+`delay_details` is used as a follow-up after a `delay_reported` intent and
+extracts the delay duration and reason from the driver's reply.
+ */
+  mode?: ClassifyRequestMode;
 }

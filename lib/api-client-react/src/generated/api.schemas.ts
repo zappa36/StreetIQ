@@ -9,9 +9,28 @@ export interface HealthStatus {
   status: string;
 }
 
+/**
+ * Classification mode. `intent` (default) returns an intent label and entity.
+`delay_details` is used as a follow-up after a `delay_reported` intent and
+extracts the delay duration and reason from the driver's reply.
+
+ */
+export type ClassifyRequestMode =
+  (typeof ClassifyRequestMode)[keyof typeof ClassifyRequestMode];
+
+export const ClassifyRequestMode = {
+  intent: "intent",
+  delay_details: "delay_details",
+} as const;
+
 export interface ClassifyRequest {
   /** The driver's spoken transcript to classify */
   transcript: string;
+  /** Classification mode. `intent` (default) returns an intent label and entity.
+`delay_details` is used as a follow-up after a `delay_reported` intent and
+extracts the delay duration and reason from the driver's reply.
+ */
+  mode?: ClassifyRequestMode;
 }
 
 export type ClassifyResponseIntent =
@@ -23,13 +42,27 @@ export const ClassifyResponseIntent = {
   customer_not_home: "customer_not_home",
   delivery_complete: "delivery_complete",
   request_map: "request_map",
+  delay_reported: "delay_reported",
+  delay_details: "delay_details",
   general: "general",
 } as const;
 
+/**
+ * Response shape depends on the request `mode`. In `intent` mode, `intent`/`entity`
+are populated. In `delay_details` mode, `minutes`/`reason` are populated.
+
+ */
 export interface ClassifyResponse {
-  intent: ClassifyResponseIntent;
+  intent?: ClassifyResponseIntent;
   /** Extracted street name, customer name, or parcel ID */
-  entity: string;
+  entity?: string;
+  /**
+   * Estimated delay in minutes (delay_details mode only)
+   * @minimum 1
+   */
+  minutes?: number;
+  /** Short phrase describing the cause of the delay (delay_details mode only) */
+  reason?: string;
   /**
    * @minimum 0
    * @maximum 1

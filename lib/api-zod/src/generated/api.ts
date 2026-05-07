@@ -16,38 +16,66 @@ export const HealthCheckResponse = zod.object({
 });
 
 /**
- * Classifies a driver's spoken transcript into an intent category using OpenAI
+ * Classifies a driver's spoken transcript into an intent category using Anthropic Claude Haiku
  * @summary Classify driver voice transcript
  */
+export const classifyTranscriptBodyModeDefault = `intent`;
+
 export const ClassifyTranscriptBody = zod.object({
   transcript: zod
     .string()
     .describe("The driver's spoken transcript to classify"),
+  mode: zod
+    .enum(["intent", "delay_details"])
+    .default(classifyTranscriptBodyModeDefault)
+    .describe(
+      "Classification mode. `intent` (default) returns an intent label and entity.\n`delay_details` is used as a follow-up after a `delay_reported` intent and\nextracts the delay duration and reason from the driver's reply.\n",
+    ),
 });
 
 export const classifyTranscriptResponseConfidenceMin = 0;
 export const classifyTranscriptResponseConfidenceMax = 1;
 
-export const ClassifyTranscriptResponse = zod.object({
-  intent: zod.enum([
-    "road_closed",
-    "parking_issue",
-    "customer_not_home",
-    "delivery_complete",
-    "request_map",
-    "general",
-  ]),
-  entity: zod
-    .string()
-    .describe("Extracted street name, customer name, or parcel ID"),
-  confidence: zod
-    .number()
-    .min(classifyTranscriptResponseConfidenceMin)
-    .max(classifyTranscriptResponseConfidenceMax),
-});
+export const ClassifyTranscriptResponse = zod
+  .object({
+    intent: zod
+      .enum([
+        "road_closed",
+        "parking_issue",
+        "customer_not_home",
+        "delivery_complete",
+        "request_map",
+        "delay_reported",
+        "delay_details",
+        "general",
+      ])
+      .optional(),
+    entity: zod
+      .string()
+      .optional()
+      .describe("Extracted street name, customer name, or parcel ID"),
+    minutes: zod
+      .number()
+      .min(1)
+      .optional()
+      .describe("Estimated delay in minutes (delay_details mode only)"),
+    reason: zod
+      .string()
+      .optional()
+      .describe(
+        "Short phrase describing the cause of the delay (delay_details mode only)",
+      ),
+    confidence: zod
+      .number()
+      .min(classifyTranscriptResponseConfidenceMin)
+      .max(classifyTranscriptResponseConfidenceMax),
+  })
+  .describe(
+    "Response shape depends on the request `mode`. In `intent` mode, `intent`\/`entity`\nare populated. In `delay_details` mode, `minutes`\/`reason` are populated.\n",
+  );
 
 /**
- * Converts text to speech audio using OpenAI TTS
+ * Converts text to speech audio using OpenAI TTS (nova voice)
  * @summary Text-to-speech synthesis
  */
 export const textToSpeechBodyVoiceDefault = `nova`;

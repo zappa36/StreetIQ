@@ -109,7 +109,7 @@ export function useHealthCheck<
 }
 
 /**
- * Classifies a driver's spoken transcript into an intent category using OpenAI
+ * Classifies a driver's spoken transcript into an intent category using Anthropic Claude Haiku
  * @summary Classify driver voice transcript
  */
 export const getClassifyTranscriptUrl = () => {
@@ -196,7 +196,7 @@ export const useClassifyTranscript = <
 };
 
 /**
- * Converts text to speech audio using OpenAI TTS
+ * Converts text to speech audio using OpenAI TTS (nova voice)
  * @summary Text-to-speech synthesis
  */
 export const getTextToSpeechUrl = () => {

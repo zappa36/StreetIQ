@@ -15,5 +15,7 @@ export const ClassifyResponseIntent = {
   customer_not_home: "customer_not_home",
   delivery_complete: "delivery_complete",
   request_map: "request_map",
+  delay_reported: "delay_reported",
+  delay_details: "delay_details",
   general: "general",
 } as const;

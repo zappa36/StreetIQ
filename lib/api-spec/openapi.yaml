@@ -80,25 +80,41 @@ components:
         transcript:
           type: string
           description: The driver's spoken transcript to classify
+        mode:
+          type: string
+          enum: [intent, delay_details]
+          default: intent
+          description: |
+            Classification mode. `intent` (default) returns an intent label and entity.
+            `delay_details` is used as a follow-up after a `delay_reported` intent and
+            extracts the delay duration and reason from the driver's reply.
       required:
         - transcript
     ClassifyResponse:
       type: object
+      description: |
+        Response shape depends on the request `mode`. In `intent` mode, `intent`/`entity`
+        are populated. In `delay_details` mode, `minutes`/`reason` are populated.
       properties:
         intent:
           type: string
-          enum: [road_closed, parking_issue, customer_not_home, delivery_complete, request_map, general]
+          enum: [road_closed, parking_issue, customer_not_home, delivery_complete, request_map, delay_reported, delay_details, general]
         entity:
           type: string
           description: Extracted street name, customer name, or parcel ID
+        minutes:
+          type: integer
+          minimum: 1
+          description: Estimated delay in minutes (delay_details mode only)
+        reason:
+          type: string
+          description: Short phrase describing the cause of the delay (delay_details mode only)
         confidence:
           type: number
           format: float
           minimum: 0
           maximum: 1
       required:
-        - intent
-        - entity
         - confidence
     TtsRequest:
       type: object

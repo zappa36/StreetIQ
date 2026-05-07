@@ -7,6 +7,7 @@
  */
 
 export * from "./classifyRequest";
+export * from "./classifyRequestMode";
 export * from "./classifyResponse";
 export * from "./classifyResponseIntent";
 export * from "./healthStatus";
