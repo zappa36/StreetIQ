@@ -102,13 +102,18 @@ components:
         entity:
           type: string
           description: Extracted street name, customer name, or parcel ID
+        parcelRef:
+          type: string
+          description: |
+            Reference to which parcel the driver is talking about (delay_reported intent only).
+            May be "next", an ordinal like "1"/"2"/"3", a parcel ID like "P003", a street name, or empty.
         minutes:
           type: integer
           minimum: 1
-          description: Estimated delay in minutes (delay_details mode only)
+          description: Estimated delay in minutes (delay_details mode, or delay_reported when driver mentioned a duration)
         reason:
           type: string
-          description: Short phrase describing the cause of the delay (delay_details mode only)
+          description: Short phrase describing the cause of the delay (delay_details mode, or delay_reported when driver gave a reason)
         confidence:
           type: number
           format: float

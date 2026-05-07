@@ -54,16 +54,24 @@ export const ClassifyTranscriptResponse = zod
       .string()
       .optional()
       .describe("Extracted street name, customer name, or parcel ID"),
+    parcelRef: zod
+      .string()
+      .optional()
+      .describe(
+        'Reference to which parcel the driver is talking about (delay_reported intent only).\nMay be \"next\", an ordinal like \"1\"\/\"2\"\/\"3\", a parcel ID like \"P003\", a street name, or empty.\n',
+      ),
     minutes: zod
       .number()
       .min(1)
       .optional()
-      .describe("Estimated delay in minutes (delay_details mode only)"),
+      .describe(
+        "Estimated delay in minutes (delay_details mode, or delay_reported when driver mentioned a duration)",
+      ),
     reason: zod
       .string()
       .optional()
       .describe(
-        "Short phrase describing the cause of the delay (delay_details mode only)",
+        "Short phrase describing the cause of the delay (delay_details mode, or delay_reported when driver gave a reason)",
       ),
     confidence: zod
       .number()

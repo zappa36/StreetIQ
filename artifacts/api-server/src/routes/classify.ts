@@ -19,21 +19,29 @@ async function getAnthropicClient() {
   }
 }
 
-const INTENT_PROMPT = `You are a voice command classifier for delivery drivers. Given a driver's spoken message, classify it into exactly one of these intents and extract any relevant entity.
+const INTENT_PROMPT = `You are a voice command classifier for delivery drivers. Given a driver's spoken message, classify it into exactly one of these intents and extract any relevant fields.
 
 Intents:
 - road_closed: Driver reports a road or street is closed, blocked, or impassable
 - parking_issue: Driver has trouble finding parking, reports a bad parking spot, or updates parking info
 - customer_not_home: Customer is not home, not answering, or unavailable
 - delivery_complete: Driver has successfully delivered a parcel
-- delay_reported: Driver says they will be delayed, late, slowed down, or running behind for an upcoming/next parcel (e.g., "I'll be delayed for the next parcel", "running late", "going to be late on my next stop")
+- delay_reported: Driver says they will be delayed, late, slowed down, or running behind for one of their parcels (e.g., "I'll be delayed for the next parcel", "running late on delivery 3", "going to be 15 minutes late due to traffic")
 - request_map: Driver wants to see the map or navigation ("show me the map", "where do I go", "navigate to", "get directions")
 - general: Any other message that doesn't fit the above categories
 
-Respond ONLY with a JSON object in this exact format (no markdown, no explanation):
+For the delay_reported intent, also extract:
+- parcelRef: which parcel the delay refers to. Use the literal string the driver said: "next" (default if they say "next parcel/stop/delivery"), an ordinal/number like "1", "2", "3" (if they say "delivery 3", "the second one", "stop number 2"), a parcel id like "P003" (if they say it), a street name (if they reference an address), or empty string if unclear.
+- minutes: estimated delay in whole minutes (integer) IF the driver mentioned a duration (e.g., "15 minutes" → 15, "an hour" → 60, "half an hour" → 30). Omit or set to null if not mentioned.
+- reason: short human-readable phrase for the cause (e.g., "heavy traffic", "flat tire", "accident") IF the driver gave a reason. Omit or set to null if not mentioned.
+
+Respond ONLY with a JSON object in this exact format (no markdown, no explanation). Include parcelRef/minutes/reason ONLY for delay_reported intent:
 {
   "intent": "<one of the intents above>",
   "entity": "<extracted street name, customer name, parcel ID, or empty string if not applicable>",
+  "parcelRef": "<see above, only for delay_reported>",
+  "minutes": <integer or null, only for delay_reported>,
+  "reason": "<short phrase or null, only for delay_reported>",
   "confidence": <0.0 to 1.0>
 }`;
 
@@ -93,11 +101,18 @@ router.post("/classify", async (req, res) => {
         confidence: parsed.confidence ?? 0.8,
       });
     } else {
-      res.json({
-        intent: parsed.intent ?? "general",
+      const intent = parsed.intent ?? "general";
+      const out: Record<string, unknown> = {
+        intent,
         entity: parsed.entity ?? "",
         confidence: parsed.confidence ?? 0.8,
-      });
+      };
+      if (intent === "delay_reported") {
+        if (typeof parsed.parcelRef === "string") out.parcelRef = parsed.parcelRef;
+        if (Number.isFinite(parsed.minutes)) out.minutes = Math.max(1, Math.round(parsed.minutes));
+        if (typeof parsed.reason === "string" && parsed.reason.length > 0) out.reason = parsed.reason;
+      }
+      res.json(out);
     }
   } catch (err) {
     console.error("Classify error:", err);

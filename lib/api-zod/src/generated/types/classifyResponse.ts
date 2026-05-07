@@ -16,12 +16,16 @@ export interface ClassifyResponse {
   intent?: ClassifyResponseIntent;
   /** Extracted street name, customer name, or parcel ID */
   entity?: string;
+  /** Reference to which parcel the driver is talking about (delay_reported intent only).
+May be "next", an ordinal like "1"/"2"/"3", a parcel ID like "P003", a street name, or empty.
+ */
+  parcelRef?: string;
   /**
-   * Estimated delay in minutes (delay_details mode only)
+   * Estimated delay in minutes (delay_details mode, or delay_reported when driver mentioned a duration)
    * @minimum 1
    */
   minutes?: number;
-  /** Short phrase describing the cause of the delay (delay_details mode only) */
+  /** Short phrase describing the cause of the delay (delay_details mode, or delay_reported when driver gave a reason) */
   reason?: string;
   /**
    * @minimum 0

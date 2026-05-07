@@ -32,8 +32,14 @@ interface ParkingSpot {
 }
 
 type PendingFollowUp =
-  | { type: "delay_details"; parcelId: string; parcelLabel: string; question: string }
+  | { type: "delay_details"; parcelId: string; parcelLabel: string; question: string; knownMinutes: number | null; knownReason: string | null }
   | { type: "confirm_navigation"; question: string; contextLabel: string };
+
+interface DelayExtras {
+  parcelRef?: string;
+  minutes?: number;
+  reason?: string;
+}
 
 interface AppState {
   driverAState: DriverState;
@@ -248,7 +254,7 @@ function reducer(state: AppState, action: Action): AppState {
 }
 
 // --- Context ---
-const DemoContext = createContext<{ state: AppState; dispatch: React.Dispatch<Action>; processIntent: (intent: string, entity: string) => void } | null>(null);
+const DemoContext = createContext<{ state: AppState; dispatch: React.Dispatch<Action>; processIntent: (intent: string, entity: string, extras?: DelayExtras) => void } | null>(null);
 
 function useDemo() {
   const ctx = useContext(DemoContext);
@@ -320,7 +326,51 @@ export default function App() {
     }
   };
 
-  const processIntent = (intent: string, entity: string) => {
+  const resolveDelayParcel = (ref: string | undefined): Parcel | null => {
+    const aParcels = stateRef.current.parcels.filter(
+      (p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed")
+    );
+    if (aParcels.length === 0) return null;
+    const isAtStop = stateRef.current.driverAState === "Parked" || stateRef.current.driverAState === "Approaching";
+    const cleaned = (ref ?? "").toLowerCase().trim();
+
+    // Empty / "next" / "the next one" → next upcoming parcel
+    if (!cleaned || /\b(next|upcoming|following)\b/.test(cleaned)) {
+      return isAtStop ? (aParcels[1] ?? aParcels[0]) : aParcels[0];
+    }
+    // Exact parcel id (P001, P002, ...)
+    const idMatch = cleaned.match(/p\s*0*([1-9]\d*)/);
+    if (idMatch) {
+      const id = `P${idMatch[1].padStart(3, "0")}`;
+      const byId = aParcels.find((p) => p.id === id);
+      if (byId) return byId;
+    }
+    // Ordinal: "delivery 3", "stop number 2", "the third", "second"
+    const ordinalWords: Record<string, number> = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6 };
+    let n: number | null = null;
+    const numMatch = cleaned.match(/\b(\d+)\b/);
+    if (numMatch) n = parseInt(numMatch[1], 10);
+    else {
+      for (const [w, v] of Object.entries(ordinalWords)) {
+        if (cleaned.includes(w)) { n = v; break; }
+      }
+    }
+    if (n !== null && n >= 1 && n <= aParcels.length) return aParcels[n - 1];
+
+    // Street name match (e.g., "maple")
+    const byStreet = aParcels.find((p) => cleaned && p.address.toLowerCase().includes(cleaned));
+    if (byStreet) return byStreet;
+    const byStreetWord = aParcels.find((p) => {
+      const words = cleaned.split(/\s+/);
+      return words.some((w) => w.length > 2 && p.address.toLowerCase().includes(w));
+    });
+    if (byStreetWord) return byStreetWord;
+
+    // Fallback: next upcoming parcel
+    return isAtStop ? (aParcels[1] ?? aParcels[0]) : aParcels[0];
+  };
+
+  const processIntent = (intent: string, entity: string, extras: DelayExtras = {}) => {
     dispatch({ type: "SET_INTENT", payload: { intent, entity } });
 
     if (intent === "road_closed") {
@@ -350,24 +400,34 @@ export default function App() {
       dispatch({ type: "SET_MAP_VISIBLE", payload: true });
 
     } else if (intent === "delay_reported") {
-      // Find the next pending parcel for Driver A.
-      // If parked at a current stop, "next" = the one after it; otherwise = the upcoming one.
-      const aParcels = stateRef.current.parcels.filter(
-        (p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed")
-      );
-      const isAtStop = stateRef.current.driverAState === "Parked" || stateRef.current.driverAState === "Approaching";
-      const nextParcel = isAtStop ? (aParcels[1] ?? aParcels[0]) : aParcels[0];
-      if (nextParcel) {
-        const label = `${nextParcel.id} — ${nextParcel.address} (${nextParcel.customer})`;
-        const question = `How long will the delay be, and what happened?`;
-        dispatch({
-          type: "SET_PENDING_FOLLOWUP",
-          payload: { type: "delay_details", parcelId: nextParcel.id, parcelLabel: label, question },
-        });
-        dispatch({ type: "ADD_EVENT", payload: `Driver A: delay_reported for next stop ${nextParcel.id} (${nextParcel.address})` });
-        playTtsAlert(`Got it. For your next stop at ${nextParcel.address}, ${question}`);
+      const target = resolveDelayParcel(extras.parcelRef);
+      if (target) {
+        const label = `${target.id} — ${target.address} (${target.customer})`;
+        if (typeof extras.minutes === "number" && extras.reason) {
+          // Driver already told us BOTH duration and reason — apply immediately, no follow-up.
+          dispatch({ type: "APPLY_DELAY", payload: { parcelId: target.id, minutes: extras.minutes, reason: extras.reason } });
+          dispatch({ type: "SET_INTENT", payload: { intent: "delay_reported", entity: `${target.id} +${extras.minutes}min · ${extras.reason}` } });
+          dispatch({ type: "ADD_EVENT", payload: `Driver A: ${target.id} delayed +${extras.minutes}min — ${extras.reason}` });
+          playTtsAlert(`Got it. ${target.id} on ${target.address} pushed back ${extras.minutes} minutes due to ${extras.reason}.`);
+        } else {
+          // Need follow-up for whatever's missing.
+          const missing: string[] = [];
+          if (typeof extras.minutes !== "number") missing.push("how long");
+          if (!extras.reason) missing.push("what happened");
+          const question = missing.length === 2
+            ? "How long will the delay be, and what happened?"
+            : missing[0] === "how long"
+              ? "How long will the delay be?"
+              : "What happened?";
+          dispatch({
+            type: "SET_PENDING_FOLLOWUP",
+            payload: { type: "delay_details", parcelId: target.id, parcelLabel: label, question, knownMinutes: extras.minutes ?? null, knownReason: extras.reason ?? null },
+          });
+          dispatch({ type: "ADD_EVENT", payload: `Driver A: delay_reported for ${target.id} (${target.address})` });
+          playTtsAlert(`Got it. For ${target.address}, ${question}`);
+        }
       } else {
-        dispatch({ type: "ADD_EVENT", payload: `Driver A: delay_reported but no upcoming parcel found` });
+        dispatch({ type: "ADD_EVENT", payload: `Driver A: delay_reported but no matching parcel found` });
       }
     }
   };
@@ -608,8 +668,8 @@ function PanelOne() {
   };
 
   const handleDelayDetails = async (text: string, pending: Extract<PendingFollowUp, { type: "delay_details" }>) => {
-    let minutes = 10;
-    let reason = "unspecified";
+    let minutes = pending.knownMinutes ?? 10;
+    let reason = pending.knownReason ?? "unspecified";
     try {
       const res = await fetch("/api/classify", {
         method: "POST",
@@ -663,7 +723,11 @@ function PanelOne() {
       });
       if (res.ok) {
         const data = await res.json();
-        processIntent(data.intent, data.entity);
+        const extras: DelayExtras = {};
+        if (typeof data.parcelRef === "string") extras.parcelRef = data.parcelRef;
+        if (typeof data.minutes === "number") extras.minutes = data.minutes;
+        if (typeof data.reason === "string" && data.reason.length > 0) extras.reason = data.reason;
+        processIntent(data.intent, data.entity, extras);
         return;
       }
     } catch (e) {
@@ -673,7 +737,23 @@ function PanelOne() {
     // Keyword fallback
     const lower = text.toLowerCase();
     if (lower.includes("closed") || lower.includes("blocked")) processIntent("road_closed", "Maple Street");
-    else if (lower.includes("delay") || lower.includes("late") || lower.includes("behind")) processIntent("delay_reported", "");
+    else if (lower.includes("delay") || lower.includes("late") || lower.includes("behind")) {
+      // Best-effort offline extraction
+      const extras: DelayExtras = {};
+      const parcelMatch = lower.match(/\b(?:delivery|stop|parcel|drop)\s*#?\s*(\d+)\b/) || lower.match(/\b(p0*\d+)\b/);
+      if (parcelMatch) extras.parcelRef = parcelMatch[1];
+      else if (/\bnext\b/.test(lower)) extras.parcelRef = "next";
+      const minMatch = lower.match(/(\d+)\s*(?:min|minute|minutes|m)\b/);
+      const hourMatch = lower.match(/(\d+)\s*(?:h|hr|hour|hours)\b/);
+      if (minMatch) extras.minutes = parseInt(minMatch[1], 10);
+      else if (hourMatch) extras.minutes = parseInt(hourMatch[1], 10) * 60;
+      else if (/\bhalf an? hour\b/.test(lower)) extras.minutes = 30;
+      else if (/\ban hour\b/.test(lower)) extras.minutes = 60;
+      const reasonHits = ["traffic", "flat tire", "accident", "construction", "weather", "rain", "snow", "detour", "breakdown"];
+      const reason = reasonHits.find((r) => lower.includes(r));
+      if (reason) extras.reason = reason;
+      processIntent("delay_reported", "", extras);
+    }
     else if (lower.includes("parking") || lower.includes("park")) processIntent("parking_issue", "");
     else if (lower.includes("not home") || lower.includes("nobody")) processIntent("customer_not_home", "");
     else if (lower.includes("delivered") || lower.includes("done")) processIntent("delivery_complete", "");
