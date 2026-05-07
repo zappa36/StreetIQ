@@ -31,12 +31,9 @@ interface ParkingSpot {
   label: string;
 }
 
-interface PendingFollowUp {
-  type: "delay_details";
-  parcelId: string;
-  parcelLabel: string;
-  question: string;
-}
+type PendingFollowUp =
+  | { type: "delay_details"; parcelId: string; parcelLabel: string; question: string }
+  | { type: "confirm_navigation"; question: string; contextLabel: string };
 
 interface AppState {
   driverAState: DriverState;
@@ -138,9 +135,7 @@ function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "SET_DRIVER_A_STATE": {
       let newState = { ...state, driverAState: action.payload };
-      if (action.payload === "Approaching") {
-        newState.mapVisible = true;
-      } else if (action.payload === "Parked" && state.driverAState !== "Parked") {
+      if (action.payload === "Parked" && state.driverAState !== "Parked") {
         // Increment nearest spot logic roughly simulated by just picking P-2
         newState.heatmapSpots = state.heatmapSpots.map((s) =>
           s.id === "P-2" ? { ...s, confirmations: s.confirmations + 1 } : s
@@ -269,17 +264,27 @@ export default function App() {
 
   useEffect(() => () => clearDemoTimers(), []);
 
-  // Proactive announcement when Driver A transitions into "Approaching"
+  // Proactive announcement when Driver A transitions into "Approaching".
+  // Asks for confirmation before opening the map — driver can answer by voice
+  // ("yes"/"no") or tap the inline buttons.
   const prevDriverAStateRef = useRef(state.driverAState);
   useEffect(() => {
     if (prevDriverAStateRef.current !== "Approaching" && state.driverAState === "Approaching") {
       const nextStop = stateRef.current.parcels.find(
         (p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed")
       );
-      const where = nextStop ? ` to ${nextStop.address}` : "";
-      const msg = `You're getting close${where}. Want me to open the navigation app and show some parking hotspots nearby?`;
-      dispatch({ type: "ADD_EVENT", payload: `FleetMind → Driver A: approach prompt (parking hotspots)` });
-      playTtsAlert(msg);
+      const where = nextStop ? `to ${nextStop.address}` : "your next stop";
+      const question = `You're getting close ${where}. Want me to open the navigation app and show some parking hotspots nearby?`;
+      dispatch({
+        type: "SET_PENDING_FOLLOWUP",
+        payload: {
+          type: "confirm_navigation",
+          question,
+          contextLabel: nextStop ? `${nextStop.id} — ${nextStop.address}` : "next stop",
+        },
+      });
+      dispatch({ type: "ADD_EVENT", payload: `FleetMind → Driver A: approach prompt (awaiting yes/no)` });
+      playTtsAlert(question);
     }
     prevDriverAStateRef.current = state.driverAState;
   }, [state.driverAState]);
@@ -522,9 +527,11 @@ function PanelOne() {
       } else {
         // Fallback for browsers without speech API in this demo context
         setTimeout(async () => {
-          const fallback = followUpRef.current
-            ? "about 15 minutes, heavy traffic"
-            : "I will be delayed for the next parcel";
+          const pending = followUpRef.current;
+          let fallback: string;
+          if (pending?.type === "delay_details") fallback = "about 15 minutes, heavy traffic";
+          else if (pending?.type === "confirm_navigation") fallback = "yes please";
+          else fallback = "I will be delayed for the next parcel";
           dispatch({ type: "SET_TRANSCRIPT", payload: fallback });
           await routeTranscript(fallback);
           dispatch({ type: "SET_LISTENING", payload: false });
@@ -540,12 +547,29 @@ function PanelOne() {
     const pending = followUpRef.current;
     if (pending && pending.type === "delay_details") {
       await handleDelayDetails(text, pending);
+    } else if (pending && pending.type === "confirm_navigation") {
+      handleNavigationAnswer(text);
     } else {
       await classifyTranscript(text);
     }
   };
 
-  const handleDelayDetails = async (text: string, pending: PendingFollowUp) => {
+  const handleNavigationAnswer = (text: string) => {
+    const lower = text.toLowerCase().trim();
+    const yes = /\b(yes|yeah|yep|yup|sure|ok(?:ay)?|please|do it|open( it)?|show|sounds good|go ahead)\b/.test(lower);
+    const no = /\b(no|nope|nah|not now|skip|don'?t|negative|cancel)\b/.test(lower);
+    const accepted = yes || (!no && false); // require explicit yes; ambiguous → treat as no
+    dispatch({ type: "SET_INTENT", payload: { intent: accepted ? "confirm_yes" : "confirm_no", entity: "" } });
+    if (accepted) {
+      dispatch({ type: "SET_MAP_VISIBLE", payload: true });
+      dispatch({ type: "ADD_EVENT", payload: `Driver A: confirmed → opening map + parking hotspots` });
+    } else {
+      dispatch({ type: "ADD_EVENT", payload: `Driver A: declined navigation prompt` });
+    }
+    dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
+  };
+
+  const handleDelayDetails = async (text: string, pending: Extract<PendingFollowUp, { type: "delay_details" }>) => {
     let minutes = 10;
     let reason = "unspecified";
     try {
@@ -662,15 +686,46 @@ function PanelOne() {
           </div>
           <div className="text-slate-900 font-medium">{state.pendingFollowUp.question}</div>
           <div className="text-xs text-slate-600 mt-2 font-mono">
-            Re: {state.pendingFollowUp.parcelLabel}
+            Re: {state.pendingFollowUp.type === "delay_details"
+              ? state.pendingFollowUp.parcelLabel
+              : state.pendingFollowUp.contextLabel}
           </div>
-          <button
-            onClick={() => dispatch({ type: "CLEAR_PENDING_FOLLOWUP" })}
-            className="mt-2 text-xs text-amber-700 hover:text-amber-900 underline"
-            data-testid="btn-cancel-followup"
-          >
-            cancel
-          </button>
+
+          {state.pendingFollowUp.type === "confirm_navigation" ? (
+            <div className="mt-3 flex gap-2">
+              <button
+                onClick={() => {
+                  dispatch({ type: "SET_MAP_VISIBLE", payload: true });
+                  dispatch({ type: "ADD_EVENT", payload: `Driver A: confirmed → opening map + parking hotspots` });
+                  dispatch({ type: "SET_INTENT", payload: { intent: "confirm_yes", entity: "" } });
+                  dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
+                }}
+                className="flex-1 px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium"
+                data-testid="btn-followup-yes"
+              >
+                Yes, open map
+              </button>
+              <button
+                onClick={() => {
+                  dispatch({ type: "ADD_EVENT", payload: `Driver A: declined navigation prompt` });
+                  dispatch({ type: "SET_INTENT", payload: { intent: "confirm_no", entity: "" } });
+                  dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
+                }}
+                className="flex-1 px-3 py-1.5 rounded bg-white hover:bg-slate-50 text-slate-700 text-sm font-medium border border-slate-300"
+                data-testid="btn-followup-no"
+              >
+                No thanks
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => dispatch({ type: "CLEAR_PENDING_FOLLOWUP" })}
+              className="mt-2 text-xs text-amber-700 hover:text-amber-900 underline"
+              data-testid="btn-cancel-followup"
+            >
+              cancel
+            </button>
+          )}
         </motion.div>
       )}
 
