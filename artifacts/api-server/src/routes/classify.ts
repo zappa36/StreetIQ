@@ -4,7 +4,8 @@ const router: IRouter = Router();
 
 // Lazy client getter — resolves at call time, not import time.
 // Returns null and logs a warning if env vars are absent.
-let _anthropic: Awaited<ReturnType<typeof import("@workspace/integrations-anthropic-ai")>>["anthropic"] | null = null;
+type AnthropicModule = typeof import("@workspace/integrations-anthropic-ai");
+let _anthropic: AnthropicModule["anthropic"] | null = null;
 
 async function getAnthropicClient() {
   if (_anthropic) return _anthropic;
