@@ -1,7 +1,22 @@
 import { Router, type IRouter } from "express";
-import { anthropic } from "@workspace/integrations-anthropic-ai";
 
 const router: IRouter = Router();
+
+// Lazy client getter — resolves at call time, not import time.
+// Returns null and logs a warning if env vars are absent.
+let _anthropic: Awaited<ReturnType<typeof import("@workspace/integrations-anthropic-ai")>>["anthropic"] | null = null;
+
+async function getAnthropicClient() {
+  if (_anthropic) return _anthropic;
+  try {
+    const mod = await import("@workspace/integrations-anthropic-ai");
+    _anthropic = mod.anthropic;
+    return _anthropic;
+  } catch (err) {
+    console.warn("Anthropic integration unavailable:", err);
+    return null;
+  }
+}
 
 const SYSTEM_PROMPT = `You are a voice command classifier for delivery drivers. Given a driver's spoken message, classify it into exactly one of these intents and extract any relevant entity.
 
@@ -28,6 +43,13 @@ router.post("/classify", async (req, res) => {
     return;
   }
 
+  const anthropic = await getAnthropicClient();
+
+  if (!anthropic) {
+    res.status(503).json({ error: "AI service unavailable", intent: "general", entity: "", confidence: 0 });
+    return;
+  }
+
   try {
     const message = await anthropic.messages.create({
       model: "claude-haiku-4-5",
@@ -49,7 +71,7 @@ router.post("/classify", async (req, res) => {
     });
   } catch (err) {
     console.error("Classify error:", err);
-    res.status(500).json({ error: "Classification failed", intent: "general", entity: "" });
+    res.status(500).json({ error: "Classification failed", intent: "general", entity: "", confidence: 0 });
   }
 });
 

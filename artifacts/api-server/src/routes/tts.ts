@@ -1,5 +1,4 @@
 import { Router, type IRouter } from "express";
-import { textToSpeech } from "@workspace/integrations-openai-ai-server/audio";
 
 const router: IRouter = Router();
 
@@ -12,13 +11,19 @@ router.post("/tts", async (req, res) => {
   }
 
   try {
-    const buffer = await textToSpeech(text, (voice as "alloy" | "nova" | "shimmer") ?? "nova", "mp3");
+    // Lazy import so missing env vars don't crash API startup
+    const { textToSpeech } = await import("@workspace/integrations-openai-ai-server/audio");
+    const buffer = await textToSpeech(
+      text,
+      (voice as "alloy" | "nova" | "shimmer") ?? "nova",
+      "mp3"
+    );
     res.set("Content-Type", "audio/mpeg");
     res.set("Cache-Control", "no-cache");
     res.send(buffer);
   } catch (err) {
-    console.error("TTS error:", err);
-    res.status(500).json({ error: "TTS failed" });
+    console.warn("TTS unavailable, client should fall back to speechSynthesis:", err);
+    res.status(503).json({ error: "TTS service unavailable" });
   }
 });
 

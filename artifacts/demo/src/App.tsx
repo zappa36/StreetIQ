@@ -231,6 +231,14 @@ function useDemo() {
 // --- Main App Component ---
 export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const demoTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  const clearDemoTimers = () => {
+    demoTimers.current.forEach(clearTimeout);
+    demoTimers.current = [];
+  };
+
+  useEffect(() => () => clearDemoTimers(), []);
 
   const playTtsAlert = async (text: string) => {
     try {
@@ -289,31 +297,34 @@ export default function App() {
   };
 
   const handleRunDemo = () => {
+    clearDemoTimers();
     dispatch({ type: "RESET_DEMO" });
     dispatch({ type: "SET_RUNNING_DEMO", payload: true });
 
-    setTimeout(() => {
-      dispatch({ type: "SET_DRIVER_A_STATE", payload: "Approaching" });
-      dispatch({ type: "ADD_EVENT", payload: `Driver A approaching P001` });
-    }, 500);
+    demoTimers.current.push(
+      setTimeout(() => {
+        dispatch({ type: "SET_DRIVER_A_STATE", payload: "Approaching" });
+        dispatch({ type: "ADD_EVENT", payload: `Driver A approaching P001` });
+      }, 500),
 
-    setTimeout(() => {
-      dispatch({ type: "SET_TRANSCRIPT", payload: "road is closed on Maple Street" });
-      dispatch({ type: "SET_INTENT", payload: { intent: "road_closed", entity: "Maple Street" } });
-      dispatch({ type: "ADD_EVENT", payload: `Driver A: road_closed "Maple Street"` });
-      dispatch({ type: "ADD_EVENT", payload: `REROUTE ALERT: Generating alternate routes...` });
-      dispatch({ type: "ROAD_CLOSED_IMPACT" });
-    }, 2000);
+      setTimeout(() => {
+        dispatch({ type: "SET_TRANSCRIPT", payload: "road is closed on Maple Street" });
+        dispatch({ type: "SET_INTENT", payload: { intent: "road_closed", entity: "Maple Street" } });
+        dispatch({ type: "ADD_EVENT", payload: `Driver A: road_closed "Maple Street"` });
+        dispatch({ type: "ADD_EVENT", payload: `REROUTE ALERT: Generating alternate routes...` });
+        dispatch({ type: "ROAD_CLOSED_IMPACT" });
+      }, 2000),
 
-    setTimeout(() => {
-      dispatch({ type: "SET_B_ALERT_VISIBLE", payload: true });
-      playTtsAlert("A colleague just reported Maple Street is closed. Want me to show an alternate route?");
-    }, 4500);
+      setTimeout(() => {
+        dispatch({ type: "SET_B_ALERT_VISIBLE", payload: true });
+        playTtsAlert("A colleague just reported Maple Street is closed. Want me to show an alternate route?");
+      }, 4500),
 
-    setTimeout(() => {
-      dispatch({ type: "ADD_EVENT", payload: `Driver B accepted reroute for P004` });
-      dispatch({ type: "DRIVER_B_ACCEPT_REROUTE" });
-    }, 8000);
+      setTimeout(() => {
+        dispatch({ type: "ADD_EVENT", payload: `Driver B accepted reroute for P004` });
+        dispatch({ type: "DRIVER_B_ACCEPT_REROUTE" });
+      }, 8000)
+    );
   };
 
   return (
@@ -356,7 +367,7 @@ export default function App() {
             {state.isRunningDemo && <span className="text-amber-400 animate-pulse text-xs font-mono">Demo running...</span>}
             <button 
               data-testid="btn-sim-reset"
-              onClick={() => dispatch({ type: "RESET_DEMO" })}
+              onClick={() => { clearDemoTimers(); dispatch({ type: "RESET_DEMO" }); }}
               className="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs transition-colors"
             >
               Reset Demo
