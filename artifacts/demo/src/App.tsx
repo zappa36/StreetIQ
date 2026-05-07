@@ -55,6 +55,11 @@ type Action =
   | { type: "SET_MAP_VISIBLE"; payload: boolean }
   | { type: "SET_ROAD_CLOSED"; payload: boolean }
   | { type: "DISMISS_A_REROUTE_OVERLAY" }
+  | { type: "ROAD_CLOSED_IMPACT" }
+  | { type: "PARKING_ISSUE_IMPACT" }
+  | { type: "CUSTOMER_NOT_HOME_IMPACT" }
+  | { type: "DELIVERY_COMPLETE_IMPACT" }
+  | { type: "DRIVER_B_ACCEPT_REROUTE" }
   | { type: "SET_B_ALERT_VISIBLE"; payload: boolean }
   | { type: "SET_B_REROUTE_ACCEPTED"; payload: boolean }
   | { type: "INCREMENT_PARKING"; payload: string }
@@ -144,6 +149,50 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, roadClosed: action.payload, driverARerouteOverlayDismissed: false };
     case "DISMISS_A_REROUTE_OVERLAY":
       return { ...state, driverARerouteOverlayDismissed: true };
+    case "ROAD_CLOSED_IMPACT":
+      return {
+        ...state,
+        roadClosed: true,
+        driverARerouteOverlayDismissed: false,
+        parcels: state.parcels.map((p) =>
+          p.id === "P001" || p.id === "P002"
+            ? { ...p, status: "delayed" as ParcelStatus, eta: addMinutes(p.eta, 15) }
+            : p
+        ),
+      };
+    case "PARKING_ISSUE_IMPACT":
+      return {
+        ...state,
+        parcels: state.parcels.map((p) =>
+          p.id === "P001" ? { ...p, status: "delayed" as ParcelStatus, eta: addMinutes(p.eta, 10) } : p
+        ),
+      };
+    case "CUSTOMER_NOT_HOME_IMPACT":
+      return {
+        ...state,
+        parcels: state.parcels.map((p) =>
+          p.id === "P001" ? { ...p, status: "rescheduled" as ParcelStatus, eta: "17:00" } : p
+        ),
+      };
+    case "DELIVERY_COMPLETE_IMPACT":
+      return {
+        ...state,
+        mapVisible: false,
+        driverAState: "Driving",
+        parcels: state.parcels.map((p) =>
+          p.id === "P001" ? { ...p, status: "delivered" as ParcelStatus } : p
+        ),
+      };
+    case "DRIVER_B_ACCEPT_REROUTE":
+      return {
+        ...state,
+        driverBRerouteAccepted: true,
+        driverBAlertVisible: false,
+        isRunningDemo: false,
+        parcels: state.parcels.map((p) =>
+          p.id === "P004" ? { ...p, eta: addMinutes(p.eta, 15) } : p
+        ),
+      };
     case "SET_B_ALERT_VISIBLE":
       return { ...state, driverBAlertVisible: action.payload };
     case "SET_B_REROUTE_ACCEPTED":
@@ -183,57 +232,55 @@ function useDemo() {
 export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
 
+  const playTtsAlert = async (text: string) => {
+    try {
+      const ttsRes = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, voice: "nova" }),
+      });
+      if (ttsRes.ok) {
+        const blob = await ttsRes.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.play();
+        return;
+      }
+    } catch {
+      // fall through to browser fallback
+    }
+    // Browser speechSynthesis fallback
+    if ("speechSynthesis" in window) {
+      const utt = new SpeechSynthesisUtterance(text);
+      utt.rate = 1;
+      window.speechSynthesis.speak(utt);
+    }
+  };
+
   const processIntent = (intent: string, entity: string) => {
     dispatch({ type: "SET_INTENT", payload: { intent, entity } });
 
     if (intent === "road_closed") {
-      dispatch({ type: "SET_ROAD_CLOSED", payload: true });
-      dispatch({ type: "ADD_EVENT", payload: `Driver A: road_closed "${entity || 'Maple Ave'}"` });
+      dispatch({ type: "ADD_EVENT", payload: `Driver A: road_closed "${entity || "Maple Ave"}"` });
       dispatch({ type: "ADD_EVENT", payload: `REROUTE ALERT: Generating alternate routes...` });
-      
-      const newParcels = state.parcels.map((p) => {
-        if (p.id === "P001" || p.id === "P002") {
-          return { ...p, status: "delayed" as ParcelStatus, eta: addMinutes(p.eta, 15) };
-        }
-        return p;
-      });
-      dispatch({ type: "UPDATE_PARCELS", payload: newParcels });
+      dispatch({ type: "ROAD_CLOSED_IMPACT" });
 
-      setTimeout(async () => {
+      setTimeout(() => {
         dispatch({ type: "SET_B_ALERT_VISIBLE", payload: true });
-        try {
-          const ttsRes = await fetch("/api/tts", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: "A colleague just reported Maple Street is closed. Want me to show an alternate route?", voice: "nova" })
-          });
-          if (ttsRes.ok) {
-            const blob = await ttsRes.blob();
-            const url = URL.createObjectURL(blob);
-            const audio = new Audio(url);
-            audio.play();
-          }
-        } catch (e) {
-          console.warn("TTS unavailable:", e);
-        }
+        playTtsAlert("A colleague just reported Maple Street is closed. Want me to show an alternate route?");
       }, 2500);
 
     } else if (intent === "parking_issue") {
       dispatch({ type: "ADD_EVENT", payload: `Driver A: parking_issue reported` });
-      const newParcels = state.parcels.map((p) => (p.id === "P001" ? { ...p, status: "delayed" as ParcelStatus, eta: addMinutes(p.eta, 10) } : p));
-      dispatch({ type: "UPDATE_PARCELS", payload: newParcels });
+      dispatch({ type: "PARKING_ISSUE_IMPACT" });
 
     } else if (intent === "customer_not_home") {
       dispatch({ type: "ADD_EVENT", payload: `Driver A: customer_not_home` });
-      const newParcels = state.parcels.map((p) => (p.id === "P001" ? { ...p, status: "rescheduled" as ParcelStatus, eta: "17:00" } : p));
-      dispatch({ type: "UPDATE_PARCELS", payload: newParcels });
+      dispatch({ type: "CUSTOMER_NOT_HOME_IMPACT" });
 
     } else if (intent === "delivery_complete") {
       dispatch({ type: "ADD_EVENT", payload: `Driver A: delivery_complete P001` });
-      const newParcels = state.parcels.map((p) => (p.id === "P001" ? { ...p, status: "delivered" as ParcelStatus } : p));
-      dispatch({ type: "UPDATE_PARCELS", payload: newParcels });
-      dispatch({ type: "SET_DRIVER_A_STATE", payload: "Driving" });
-      dispatch({ type: "SET_MAP_VISIBLE", payload: false });
+      dispatch({ type: "DELIVERY_COMPLETE_IMPACT" });
 
     } else if (intent === "request_map") {
       dispatch({ type: "ADD_EVENT", payload: `Driver A: request_map` });
@@ -244,8 +291,7 @@ export default function App() {
   const handleRunDemo = () => {
     dispatch({ type: "RESET_DEMO" });
     dispatch({ type: "SET_RUNNING_DEMO", payload: true });
-    
-    // Auto-script sequence
+
     setTimeout(() => {
       dispatch({ type: "SET_DRIVER_A_STATE", payload: "Approaching" });
       dispatch({ type: "ADD_EVENT", payload: `Driver A approaching P001` });
@@ -253,17 +299,20 @@ export default function App() {
 
     setTimeout(() => {
       dispatch({ type: "SET_TRANSCRIPT", payload: "road is closed on Maple Street" });
-      processIntent("road_closed", "Maple Street");
+      dispatch({ type: "SET_INTENT", payload: { intent: "road_closed", entity: "Maple Street" } });
+      dispatch({ type: "ADD_EVENT", payload: `Driver A: road_closed "Maple Street"` });
+      dispatch({ type: "ADD_EVENT", payload: `REROUTE ALERT: Generating alternate routes...` });
+      dispatch({ type: "ROAD_CLOSED_IMPACT" });
     }, 2000);
 
     setTimeout(() => {
-      // simulate Driver B pressing yes
-      dispatch({ type: "SET_B_REROUTE_ACCEPTED", payload: true });
-      dispatch({ type: "SET_B_ALERT_VISIBLE", payload: false });
-      const newParcels = state.parcels.map(p => p.id === "P004" ? { ...p, eta: addMinutes(p.eta, 15) } : p);
-      dispatch({ type: "UPDATE_PARCELS", payload: newParcels });
+      dispatch({ type: "SET_B_ALERT_VISIBLE", payload: true });
+      playTtsAlert("A colleague just reported Maple Street is closed. Want me to show an alternate route?");
+    }, 4500);
+
+    setTimeout(() => {
       dispatch({ type: "ADD_EVENT", payload: `Driver B accepted reroute for P004` });
-      dispatch({ type: "SET_RUNNING_DEMO", payload: false });
+      dispatch({ type: "DRIVER_B_ACCEPT_REROUTE" });
     }, 8000);
   };
 
