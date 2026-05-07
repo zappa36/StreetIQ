@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
@@ -60,11 +61,14 @@ Respond ONLY with a JSON object in this exact format (no markdown, no explanatio
 
 router.post("/classify", async (req, res) => {
   const { transcript, mode } = req.body as { transcript?: string; mode?: string };
+  const startedAt = Date.now();
 
   if (!transcript || typeof transcript !== "string") {
     res.status(400).json({ error: "transcript is required" });
     return;
   }
+
+  logger.info({ tag: "classify.in", transcript, mode: mode ?? "intent" }, "↪ classify request");
 
   const anthropic = await getAnthropicClient();
 
@@ -95,11 +99,13 @@ router.post("/classify", async (req, res) => {
 
     if (mode === "delay_details") {
       const minutes = Number.isFinite(parsed.minutes) ? Math.max(1, Math.round(parsed.minutes)) : 10;
-      res.json({
+      const out = {
         minutes,
         reason: typeof parsed.reason === "string" && parsed.reason.length > 0 ? parsed.reason : "unspecified",
         confidence: parsed.confidence ?? 0.8,
-      });
+      };
+      logger.info({ tag: "classify.out", mode: "delay_details", transcript, latencyMs: Date.now() - startedAt, ...out }, "↩ classify response");
+      res.json(out);
     } else {
       const intent = parsed.intent ?? "general";
       const out: Record<string, unknown> = {
@@ -112,10 +118,11 @@ router.post("/classify", async (req, res) => {
         if (Number.isFinite(parsed.minutes)) out.minutes = Math.max(1, Math.round(parsed.minutes));
         if (typeof parsed.reason === "string" && parsed.reason.length > 0) out.reason = parsed.reason;
       }
+      logger.info({ tag: "classify.out", mode: "intent", transcript, latencyMs: Date.now() - startedAt, ...out }, "↩ classify response");
       res.json(out);
     }
   } catch (err) {
-    console.error("Classify error:", err);
+    logger.error({ tag: "classify.err", transcript, mode, err: (err as Error).message }, "Classify error");
     if (mode === "delay_details") {
       res.status(500).json({ error: "Classification failed", minutes: 10, reason: "unspecified", confidence: 0 });
     } else {

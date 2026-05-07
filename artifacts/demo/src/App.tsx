@@ -387,6 +387,7 @@ export default function App() {
   };
 
   const processIntent = (intent: string, entity: string, extras: DelayExtras = {}) => {
+    console.log("[FLEETMIND] processIntent", { intent, entity, extras });
     dispatch({ type: "SET_INTENT", payload: { intent, entity } });
 
     if (intent === "road_closed") {
@@ -417,6 +418,7 @@ export default function App() {
 
     } else if (intent === "delay_reported") {
       const target = resolveDelayParcel(extras.parcelRef);
+      console.log("[FLEETMIND] delay_reported resolved", { parcelRef: extras.parcelRef, resolvedTo: target?.id ?? null, target });
       if (target) {
         const label = `${target.id} — ${target.address} (${target.customer})`;
         if (typeof extras.minutes === "number" && extras.reason) {
@@ -635,6 +637,7 @@ function PanelOne() {
 
   const routeTranscript = async (text: string) => {
     const pending = followUpRef.current;
+    console.log("[FLEETMIND] transcript →", { text, pending: pending?.type ?? null });
     if (pending && pending.type === "delay_details" && !looksLikeFreshIntent(text)) {
       await handleDelayDetails(text, pending);
     } else if (pending && pending.type === "confirm_navigation" && !looksLikeFreshIntent(text)) {
@@ -749,6 +752,7 @@ function PanelOne() {
       });
       if (res.ok) {
         const data = await res.json();
+        console.log("[FLEETMIND] classify ←", { transcript: text, ...data });
         const extras: DelayExtras = {};
         if (typeof data.parcelRef === "string") extras.parcelRef = data.parcelRef;
         if (typeof data.minutes === "number") extras.minutes = data.minutes;
@@ -757,7 +761,7 @@ function PanelOne() {
         return;
       }
     } catch (e) {
-      // fallback
+      console.warn("[FLEETMIND] classify failed, using keyword fallback", { transcript: text, error: e });
     }
 
     // Keyword fallback
