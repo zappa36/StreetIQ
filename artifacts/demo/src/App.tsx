@@ -247,7 +247,7 @@ function reducer(state: AppState, action: Action): AppState {
                 ...p,
                 status: "delayed" as ParcelStatus,
                 eta: addMinutes(p.eta, action.payload.minutes),
-                delayReasons: [...p.delayReasons, `+${action.payload.minutes}min · ${action.payload.reason}`],
+                delayReasons: [...(p.delayReasons ?? []), `+${action.payload.minutes}min · ${action.payload.reason}`],
               }
             : p
         ),
@@ -1040,9 +1040,9 @@ function PanelThree() {
                   <td className="px-4 py-3">
                     <div className="font-medium text-slate-900">{p.address}</div>
                     <div className="text-xs text-slate-500">{p.customer}</div>
-                    {p.delayReasons.length > 0 && (
+                    {(p.delayReasons ?? []).length > 0 && (
                       <div className="mt-1.5 flex flex-wrap gap-1" data-testid={`delay-reasons-${p.id}`}>
-                        {p.delayReasons.map((r, i) => (
+                        {(p.delayReasons ?? []).map((r, i) => (
                           <span
                             key={i}
                             className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-orange-50 text-orange-700 border border-orange-200 text-[10px] font-medium"
