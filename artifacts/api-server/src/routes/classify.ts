@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { openai } from "@workspace/integrations-openai-ai-server";
+import { anthropic } from "@workspace/integrations-anthropic-ai";
 
 const router: IRouter = Router();
 
@@ -29,16 +29,17 @@ router.post("/classify", async (req, res) => {
   }
 
   try {
-    const message = await openai.chat.completions.create({
-      model: "gpt-5-mini",
-      max_completion_tokens: 256,
+    const message = await anthropic.messages.create({
+      model: "claude-haiku-4-5",
+      max_tokens: 256,
       messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: transcript },
+        { role: "user", content: `${SYSTEM_PROMPT}\n\nDriver said: ${transcript}` },
       ],
     });
 
-    const text = message.choices[0]?.message?.content ?? "{}";
+    const block = message.content[0];
+    const raw = block.type === "text" ? block.text : "{}";
+    const text = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
     const parsed = JSON.parse(text);
 
     res.json({

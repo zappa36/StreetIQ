@@ -31,7 +31,7 @@ paths:
       operationId: classifyTranscript
       tags: [voice]
       summary: Classify driver voice transcript
-      description: Classifies a driver's spoken transcript into an intent category using OpenAI
+      description: Classifies a driver's spoken transcript into an intent category using Anthropic Claude Haiku
       requestBody:
         required: true
         content:
@@ -50,7 +50,7 @@ paths:
       operationId: textToSpeech
       tags: [voice]
       summary: Text-to-speech synthesis
-      description: Converts text to speech audio using OpenAI TTS
+      description: Converts text to speech audio using OpenAI TTS (nova voice)
       requestBody:
         required: true
         content:
