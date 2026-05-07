@@ -502,21 +502,6 @@ export default function App() {
               ))}
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-slate-400">Driver B:</span>
-            <div className="flex gap-1">
-              {(["Driving", "Approaching", "Parked"] as DriverState[]).map(s => (
-                <button
-                  key={s}
-                  data-testid={`btn-sim-b-${s}`}
-                  onClick={() => dispatch({ type: "SET_DRIVER_B_STATE", payload: s })}
-                  className={`px-2 py-0.5 rounded text-xs transition-colors ${state.driverBState === s ? "bg-blue-600 text-white" : "bg-slate-800 hover:bg-slate-700"}`}
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
-          </div>
           <div className="ml-auto flex items-center gap-3">
             {state.isRunningDemo && <span className="text-amber-400 animate-pulse text-xs font-mono">Demo running...</span>}
             <button 
