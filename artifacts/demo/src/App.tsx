@@ -32,9 +32,12 @@ interface ParkingSpot {
   label: string;
 }
 
+type DriverBScenarioId = "maple_closed" | "oak_traffic" | "customer_unavailable" | "parking_tip" | "oak_accident";
+
 type PendingFollowUp =
   | { type: "delay_details"; parcelId: string; parcelLabel: string; question: string; knownMinutes: number | null; knownReason: string | null }
-  | { type: "confirm_navigation"; question: string; contextLabel: string };
+  | { type: "confirm_navigation"; question: string; contextLabel: string }
+  | { type: "inbound_alert"; scenarioId: DriverBScenarioId; summary: string; fullMessage: string; question: string };
 
 interface DelayExtras {
   parcelRef?: string;
@@ -86,6 +89,7 @@ type Action =
   | { type: "SET_PENDING_FOLLOWUP"; payload: PendingFollowUp }
   | { type: "CLEAR_PENDING_FOLLOWUP" }
   | { type: "APPLY_DELAY"; payload: { parcelId: string; minutes: number; reason: string } }
+  | { type: "APPLY_INBOUND_SCENARIO"; payload: { scenarioId: DriverBScenarioId } }
   | { type: "RESET_DEMO" };
 
 // --- Mock Data ---
@@ -129,6 +133,54 @@ const initialState: AppState = {
   isListening: false,
   isRunningDemo: false,
   pendingFollowUp: null,
+};
+
+// --- Driver B → Driver A scenarios (Panel 4 buttons) ---
+// Each button is a colleague-reported piece of intelligence that affects
+// Driver A's route. Flow: dashboard updates → TTS asks Driver A "want to
+// hear it?" → on yes, TTS reads fullMessage and the parcel changes apply.
+const DRIVER_B_SCENARIOS: Record<DriverBScenarioId, {
+  label: string;
+  shortHint: string;
+  summary: string;
+  fullMessage: string;
+  tone: "amber" | "red" | "emerald";
+}> = {
+  maple_closed: {
+    label: "Maple Ave closed (construction)",
+    shortHint: "Reroute P002 via 2nd Ave, +10 min",
+    summary: "Maple Avenue closed for construction",
+    fullMessage: "Driver B just reported Maple Avenue is closed for construction. I've rerouted parcel two — 34 Maple Avenue — via 2nd Avenue. New ETA pushed back ten minutes.",
+    tone: "amber",
+  },
+  oak_traffic: {
+    label: "Heavy traffic on Oak St",
+    shortHint: "Re-sequence: P002 before P001",
+    summary: "Heavy traffic on Oak Street",
+    fullMessage: "Driver B reports heavy traffic on Oak Street. I've re-sequenced your route — head to parcel two on Maple Avenue first, then come back to parcel one on Oak Street. Traffic should clear in fifteen minutes.",
+    tone: "amber",
+  },
+  customer_unavailable: {
+    label: "P001 customer not home",
+    shortHint: "Reschedule P001 to 17:00, push to end",
+    summary: "Customer at P001 not home until 5 PM",
+    fullMessage: "Driver B passed along a message from dispatch. The customer at parcel one on Oak Street isn't home until 5 PM. I've moved it to the end of your route — go straight to parcel two on Maple Avenue.",
+    tone: "amber",
+  },
+  parking_tip: {
+    label: "Free parking on Pine Rd",
+    shortHint: "Boost Pine Rd East parking hotspot",
+    summary: "Open parking spot near Pine Road",
+    fullMessage: "Quick tip from Driver B — there's open parking on Pine Road East right next to parcel three. I've marked it on your map.",
+    tone: "emerald",
+  },
+  oak_accident: {
+    label: "Accident on Oak St",
+    shortHint: "Reroute P001 via Birch St, +15 min",
+    summary: "Accident blocking Oak Street",
+    fullMessage: "Driver B just witnessed an accident blocking Oak Street near parcel one. I've rerouted you via Birch Street — adds about fifteen minutes.",
+    tone: "red",
+  },
 };
 
 // --- Helper ---
@@ -237,6 +289,58 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, pendingFollowUp: action.payload };
     case "CLEAR_PENDING_FOLLOWUP":
       return { ...state, pendingFollowUp: null };
+    case "APPLY_INBOUND_SCENARIO": {
+      const sid = action.payload.scenarioId;
+      if (sid === "maple_closed") {
+        return {
+          ...state,
+          parcels: state.parcels.map((p) =>
+            p.id === "P002"
+              ? { ...p, status: "delayed" as ParcelStatus, eta: addMinutes(p.eta, 10), delayReasons: [...(p.delayReasons ?? []), "+10min · Maple Ave closed"] }
+              : p
+          ),
+        };
+      }
+      if (sid === "oak_traffic") {
+        // Swap P001 and P002 positions in the parcels array (route order).
+        const next = [...state.parcels];
+        const i1 = next.findIndex((p) => p.id === "P001");
+        const i2 = next.findIndex((p) => p.id === "P002");
+        if (i1 >= 0 && i2 >= 0) [next[i1], next[i2]] = [next[i2], next[i1]];
+        return { ...state, parcels: next };
+      }
+      if (sid === "customer_unavailable") {
+        // Mark P001 rescheduled to 17:00 and move it to the end of Driver A's route.
+        const aParcels = state.parcels.filter((p) => p.driver === "Driver A");
+        const others = state.parcels.filter((p) => p.driver !== "Driver A");
+        const reordered = [
+          ...aParcels.filter((p) => p.id !== "P001"),
+          ...aParcels
+            .filter((p) => p.id === "P001")
+            .map((p) => ({ ...p, status: "rescheduled" as ParcelStatus, eta: "17:00", delayReasons: [...(p.delayReasons ?? []), "rescheduled · customer not home"] })),
+        ];
+        return { ...state, parcels: [...reordered, ...others] };
+      }
+      if (sid === "parking_tip") {
+        return {
+          ...state,
+          heatmapSpots: state.heatmapSpots.map((s) =>
+            s.id === "P-4" ? { ...s, confirmations: s.confirmations + 5 } : s
+          ),
+        };
+      }
+      if (sid === "oak_accident") {
+        return {
+          ...state,
+          parcels: state.parcels.map((p) =>
+            p.id === "P001"
+              ? { ...p, status: "delayed" as ParcelStatus, eta: addMinutes(p.eta, 15), delayReasons: [...(p.delayReasons ?? []), "+15min · accident on Oak St"] }
+              : p
+          ),
+        };
+      }
+      return state;
+    }
     case "APPLY_DELAY":
       return {
         ...state,
@@ -260,7 +364,12 @@ function reducer(state: AppState, action: Action): AppState {
 }
 
 // --- Context ---
-const DemoContext = createContext<{ state: AppState; dispatch: React.Dispatch<Action>; processIntent: (intent: string, entity: string, extras?: DelayExtras) => void } | null>(null);
+const DemoContext = createContext<{
+  state: AppState;
+  dispatch: React.Dispatch<Action>;
+  processIntent: (intent: string, entity: string, extras?: DelayExtras) => void;
+  triggerInboundAlert: (scenarioId: DriverBScenarioId) => void;
+} | null>(null);
 
 function useDemo() {
   const ctx = useContext(DemoContext);
@@ -450,6 +559,24 @@ export default function App() {
     }
   };
 
+  // Trigger an inbound alert from Driver B → Driver A.
+  // Step 1: dashboard logs the colleague-reported event.
+  // Step 2: open a confirm-style follow-up on Panel 1 ("Want to hear it?").
+  // Step 3 happens on Yes (acceptInboundAlert) — TTS reads the full message
+  //   and APPLY_INBOUND_SCENARIO mutates parcels accordingly.
+  const triggerInboundAlert = (scenarioId: DriverBScenarioId) => {
+    const sc = DRIVER_B_SCENARIOS[scenarioId];
+    console.log("[FLEETMIND] triggerInboundAlert", { scenarioId, summary: sc.summary });
+    dispatch({ type: "ADD_EVENT", payload: `Driver B → Dispatch: ${sc.summary}` });
+    dispatch({ type: "ADD_EVENT", payload: `FleetMind → Driver A: relaying alert (awaiting yes/no)` });
+    const question = `New notification from Driver B about ${sc.summary.toLowerCase()}. Would you like to hear it?`;
+    dispatch({
+      type: "SET_PENDING_FOLLOWUP",
+      payload: { type: "inbound_alert", scenarioId, summary: sc.summary, fullMessage: sc.fullMessage, question },
+    });
+    playTtsAlert(`You have a new notification from Driver B. Would you like to hear it?`);
+  };
+
   const handleRunDemo = () => {
     clearDemoTimers();
     dispatch({ type: "RESET_DEMO" });
@@ -482,7 +609,7 @@ export default function App() {
   };
 
   return (
-    <DemoContext.Provider value={{ state, dispatch, processIntent }}>
+    <DemoContext.Provider value={{ state, dispatch, processIntent, triggerInboundAlert }}>
       <div className="min-h-screen w-full bg-slate-100 flex flex-col font-sans overflow-hidden text-slate-900">
         
         {/* Simulation Controls */}
@@ -565,6 +692,40 @@ export default function App() {
 // --- Panel 1: Voice Cockpit ---
 function PanelOne() {
   const { state, dispatch, processIntent } = useDemo();
+
+  const playInboundTts = async (text: string) => {
+    try {
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, voice: "nova" }),
+      });
+      if (res.ok) {
+        const blob = await res.blob();
+        new Audio(URL.createObjectURL(blob)).play().catch(() => {});
+        return;
+      }
+    } catch { /* fall through */ }
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+    }
+  };
+
+  const acceptInboundAlert = (alert: { scenarioId: DriverBScenarioId; summary: string; fullMessage: string }) => {
+    dispatch({ type: "SET_INTENT", payload: { intent: "confirm_yes", entity: alert.scenarioId } });
+    dispatch({ type: "ADD_EVENT", payload: `Driver A: accepted alert "${alert.summary}"` });
+    dispatch({ type: "APPLY_INBOUND_SCENARIO", payload: { scenarioId: alert.scenarioId } });
+    dispatch({ type: "ADD_EVENT", payload: `FleetMind → Driver A: ${alert.fullMessage}` });
+    dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
+    playInboundTts(alert.fullMessage);
+  };
+
+  const declineInboundAlert = (alert: { summary: string }) => {
+    dispatch({ type: "SET_INTENT", payload: { intent: "confirm_no", entity: "" } });
+    dispatch({ type: "ADD_EVENT", payload: `Driver A: dismissed alert "${alert.summary}"` });
+    dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
+  };
+
   const followUpRef = useRef(state.pendingFollowUp);
   useEffect(() => { followUpRef.current = state.pendingFollowUp; }, [state.pendingFollowUp]);
 
@@ -620,6 +781,20 @@ function PanelOne() {
       && /\b(next|another|again|also|more|delivery\s*\d|parcel\s*\d|stop\s*\d|p0*\d+)\b/.test(t);
   };
 
+  const parseYesNo = (text: string): "yes" | "no" | null => {
+    const lower = text.toLowerCase();
+    if (/\b(yes|yeah|yep|yup|sure|ok(?:ay)?|please|do it|go ahead|read it|sounds good|tell me|let'?s hear)\b/.test(lower)) return "yes";
+    if (/\b(no|nope|nah|skip|dismiss|not now|later|cancel)\b/.test(lower)) return "no";
+    return null;
+  };
+
+  const handleInboundAnswer = (text: string, alert: { scenarioId: DriverBScenarioId; summary: string; fullMessage: string }) => {
+    const ans = parseYesNo(text);
+    if (ans === "yes") acceptInboundAlert(alert);
+    else if (ans === "no") declineInboundAlert(alert);
+    else acceptInboundAlert(alert); // ambiguous → default to playing it (fail-open for the demo)
+  };
+
   const routeTranscript = async (text: string) => {
     const pending = followUpRef.current;
     console.log("[FLEETMIND] transcript →", { text, pending: pending?.type ?? null });
@@ -627,6 +802,8 @@ function PanelOne() {
       await handleDelayDetails(text, pending);
     } else if (pending && pending.type === "confirm_navigation" && !looksLikeFreshIntent(text)) {
       handleNavigationAnswer(text);
+    } else if (pending && pending.type === "inbound_alert" && !looksLikeFreshIntent(text)) {
+      handleInboundAnswer(text, pending);
     } else {
       // Either no pending, or the user clearly started a new request — clear and classify fresh.
       if (pending) dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
@@ -821,10 +998,35 @@ function PanelOne() {
           <div className="text-xs text-slate-600 mt-2 font-mono">
             Re: {state.pendingFollowUp.type === "delay_details"
               ? state.pendingFollowUp.parcelLabel
-              : state.pendingFollowUp.contextLabel}
+              : state.pendingFollowUp.type === "confirm_navigation"
+                ? state.pendingFollowUp.contextLabel
+                : `Driver B → ${state.pendingFollowUp.summary}`}
           </div>
 
-          {state.pendingFollowUp.type === "confirm_navigation" ? (
+          {state.pendingFollowUp.type === "inbound_alert" ? (
+            <div className="mt-3 flex gap-2">
+              <button
+                onClick={() => {
+                  const alert = state.pendingFollowUp as Extract<PendingFollowUp, { type: "inbound_alert" }>;
+                  acceptInboundAlert(alert);
+                }}
+                className="flex-1 px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium"
+                data-testid="btn-inbound-yes"
+              >
+                Yes, read it
+              </button>
+              <button
+                onClick={() => {
+                  const alert = state.pendingFollowUp as Extract<PendingFollowUp, { type: "inbound_alert" }>;
+                  declineInboundAlert(alert);
+                }}
+                className="flex-1 px-3 py-1.5 rounded bg-white hover:bg-slate-50 text-slate-700 text-sm font-medium border border-slate-300"
+                data-testid="btn-inbound-no"
+              >
+                Dismiss
+              </button>
+            </div>
+          ) : state.pendingFollowUp.type === "confirm_navigation" ? (
             state.mapOpening ? (
               <div className="mt-3 flex items-center gap-2 text-emerald-700 text-sm font-medium" data-testid="map-opening">
                 <Loader2 size={14} className="animate-spin" />
@@ -1128,121 +1330,88 @@ function PanelThree() {
   );
 }
 
-// --- Panel 4: Proactive Alert ---
+// --- Panel 4: Driver B → Driver A Scenario Triggers ---
+// Each button reports a piece of intelligence from Driver B that affects
+// Driver A's route. Pressing one logs to the dashboard, then opens a
+// "want to hear it?" prompt on Panel 1 with TTS + voice yes/no.
 function PanelFour() {
-  const { state, dispatch } = useDemo();
-  
-  const bParcel = state.parcels.find(p => p.driver === "Driver B" && p.status === "pending");
+  const { state, triggerInboundAlert } = useDemo();
+  const bParcel = state.parcels.find((p) => p.driver === "Driver B" && p.status === "pending");
+  const pendingAlert = state.pendingFollowUp?.type === "inbound_alert" ? state.pendingFollowUp : null;
 
-  const handleAcceptReroute = () => {
-    dispatch({ type: "SET_B_REROUTE_ACCEPTED", payload: true });
-    // Apply delay to P004
-    const newParcels = state.parcels.map(p => p.id === "P004" ? { ...p, eta: addMinutes(p.eta, 15) } : p);
-    dispatch({ type: "UPDATE_PARCELS", payload: newParcels });
-    dispatch({ type: "ADD_EVENT", payload: `Driver B accepted proactive reroute for P004` });
-  };
-
-  const handleDismissAlert = () => {
-    dispatch({ type: "SET_B_ALERT_VISIBLE", payload: false });
+  const toneClasses: Record<"amber" | "red" | "emerald", { bar: string; icon: string; chip: string }> = {
+    amber: { bar: "bg-amber-500", icon: "text-amber-600", chip: "bg-amber-50 text-amber-700 border-amber-200" },
+    red: { bar: "bg-red-500", icon: "text-red-600", chip: "bg-red-50 text-red-700 border-red-200" },
+    emerald: { bar: "bg-emerald-500", icon: "text-emerald-600", chip: "bg-emerald-50 text-emerald-700 border-emerald-200" },
   };
 
   return (
-    <div className="flex-1 flex flex-col p-6 pt-12 items-center justify-center relative">
-      
+    <div className="flex-1 flex flex-col p-6 pt-12 relative overflow-auto">
       {/* State Badge */}
       <div className="absolute top-4 right-4 flex items-center gap-2 bg-slate-200 px-3 py-1.5 rounded-full border border-slate-300">
         <div className={`w-2 h-2 rounded-full ${state.driverBState === 'Driving' ? 'bg-blue-500' : state.driverBState === 'Approaching' ? 'bg-amber-500' : 'bg-emerald-500'}`} />
         <span className="text-sm font-medium text-slate-700">{state.driverBState}</span>
       </div>
 
-      <div className="w-full max-w-sm flex flex-col gap-6">
-        {/* Current Parcel */}
+      <div className="w-full max-w-md mx-auto flex flex-col gap-4">
+        {/* Driver B's current parcel */}
         {bParcel && (
-          <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 flex flex-col gap-2">
-            <div className="flex justify-between items-start">
-              <div className="flex items-center gap-2 text-slate-500 font-mono text-xs">
-                <Package size={14} /> {bParcel.id}
-              </div>
-              <div className="text-right">
-                <div className="text-xl font-bold text-slate-900 leading-none">{bParcel.eta}</div>
-                <div className="text-xs text-slate-500 font-mono">ETA</div>
-              </div>
-            </div>
-            <div>
-              <div className="text-lg font-semibold text-slate-900">{bParcel.address}</div>
-              <div className="text-sm text-slate-600">{bParcel.customer}</div>
+          <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-3 flex items-center gap-3">
+            <Truck size={18} className="text-slate-400" />
+            <div className="flex-1">
+              <div className="text-xs font-mono text-slate-500">{bParcel.id} · ETA {bParcel.eta}</div>
+              <div className="text-sm font-semibold text-slate-900">{bParcel.address}</div>
+              <div className="text-xs text-slate-500">{bParcel.customer}</div>
             </div>
           </div>
         )}
 
-        {/* Proactive Alert Card */}
-        <AnimatePresence>
-          {state.driverBAlertVisible && !state.driverBRerouteAccepted && (
-            <motion.div 
-              initial={{ y: 20, opacity: 0, scale: 0.95 }}
-              animate={{ y: 0, opacity: 1, scale: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-amber-50 border-2 border-amber-200 rounded-xl p-5 shadow-lg relative overflow-hidden"
-            >
-              <div className="absolute top-0 left-0 w-1 h-full bg-amber-500" />
-              <div className="flex items-start gap-3 mb-4">
-                <AlertTriangle className="text-amber-500 shrink-0 mt-0.5" size={24} />
-                <div>
-                  <h3 className="font-bold text-amber-900 text-lg">Proactive Reroute</h3>
-                  <p className="text-amber-800/80 text-sm mt-1 leading-snug">
-                    A colleague reported Maple Street is closed. Want to use an alternate route?
-                  </p>
-                </div>
-              </div>
-              <div className="flex gap-2 w-full">
-                <Button variant="outline" className="flex-1 bg-white border-amber-200 text-amber-700 hover:bg-amber-100 hover:text-amber-900" onClick={handleDismissAlert}>
-                  No, Thanks
-                </Button>
-                <Button className="flex-1 bg-amber-500 hover:bg-amber-600 text-white shadow-sm" onClick={handleAcceptReroute}>
-                  Yes — Show Route
-                </Button>
-              </div>
-            </motion.div>
-          )}
-
-          {state.driverBRerouteAccepted && (
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm"
-            >
-              <div className="flex items-center gap-2 text-emerald-600 font-semibold mb-3">
-                <Navigation size={18} />
-                Alternate Route Active
-              </div>
-              <div className="w-full h-32 bg-slate-50 rounded-lg border border-slate-200 overflow-hidden">
-                <svg viewBox="0 0 480 280" className="w-full h-full text-slate-300">
-                  <line x1="30" y1="50" x2="430" y2="50" stroke="currentColor" strokeWidth="8" strokeLinecap="round" />
-                  <line x1="30" y1="130" x2="430" y2="130" stroke="currentColor" strokeWidth="8" strokeLinecap="round" />
-                  <line x1="300" y1="20" x2="300" y2="280" stroke="currentColor" strokeWidth="8" strokeLinecap="round" />
-                  
-                  {/* Original dashed */}
-                  <polyline points="30,130 300,130" fill="none" stroke="#94a3b8" strokeWidth="4" strokeDasharray="6 4" strokeLinejoin="round" />
-                  
-                  {/* Alternate Green */}
-                  <polyline points="30,130 30,50 300,50 300,130" fill="none" stroke="#10b981" strokeWidth="4" strokeLinejoin="round" />
-                  
-                  {/* Blockage */}
-                  <line x1="140" y1="120" x2="160" y2="140" stroke="#ef4444" strokeWidth="4" />
-                  <line x1="160" y1="120" x2="140" y2="140" stroke="#ef4444" strokeWidth="4" />
-                </svg>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {!state.driverBAlertVisible && !state.driverBRerouteAccepted && (
-           <div className="text-center text-slate-400 text-sm font-mono mt-8">
-             Awaiting intelligence...
-           </div>
+        {/* Pending alert indicator */}
+        {pendingAlert && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-800 flex items-center gap-2">
+            <Loader2 size={12} className="animate-spin" />
+            Sent to Driver A — awaiting yes/no on Panel 1
+          </div>
         )}
-      </div>
 
+        <div className="text-xs uppercase tracking-widest text-slate-500 font-semibold mt-2">
+          Report to Dispatch
+        </div>
+        <div className="text-xs text-slate-500 -mt-2 leading-snug">
+          Tap to relay an alert to Driver A. The dashboard updates immediately, then FleetMind asks Driver A by voice if they want to hear the details.
+        </div>
+
+        {/* Scenario buttons */}
+        <div className="flex flex-col gap-2">
+          {(Object.entries(DRIVER_B_SCENARIOS) as [DriverBScenarioId, typeof DRIVER_B_SCENARIOS[DriverBScenarioId]][]).map(([id, sc]) => {
+            const tc = toneClasses[sc.tone];
+            const isActive = pendingAlert?.scenarioId === id;
+            return (
+              <button
+                key={id}
+                onClick={() => triggerInboundAlert(id)}
+                disabled={!!pendingAlert}
+                data-testid={`btn-driver-b-${id}`}
+                className={`relative text-left bg-white border rounded-xl p-3 pl-4 shadow-sm transition-all overflow-hidden
+                  ${pendingAlert ? "opacity-60 cursor-not-allowed" : "hover:shadow-md hover:-translate-y-0.5 active:translate-y-0"}
+                  ${isActive ? "ring-2 ring-blue-400" : "border-slate-200"}`}
+              >
+                <div className={`absolute top-0 left-0 w-1 h-full ${tc.bar}`} />
+                <div className="flex items-start gap-3">
+                  <AlertTriangle size={18} className={`shrink-0 mt-0.5 ${tc.icon}`} />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-slate-900 leading-tight">{sc.label}</div>
+                    <div className="text-xs text-slate-500 mt-0.5 leading-snug">{sc.shortHint}</div>
+                    <div className={`inline-block mt-1.5 px-1.5 py-0.5 rounded border text-[10px] font-mono ${tc.chip}`}>
+                      affects Driver A
+                    </div>
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
