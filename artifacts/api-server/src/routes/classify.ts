@@ -1,11 +1,7 @@
 import { Router, type IRouter } from "express";
-import Anthropic from "@anthropic-ai/sdk";
+import { openai } from "@workspace/integrations-openai-ai-server";
 
 const router: IRouter = Router();
-
-const client = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
 
 const SYSTEM_PROMPT = `You are a voice command classifier for delivery drivers. Given a driver's spoken message, classify it into exactly one of these intents and extract any relevant entity.
 
@@ -32,25 +28,17 @@ router.post("/classify", async (req, res) => {
     return;
   }
 
-  if (!process.env.ANTHROPIC_API_KEY) {
-    res.status(503).json({ error: "ANTHROPIC_API_KEY not configured" });
-    return;
-  }
-
   try {
-    const message = await client.messages.create({
-      model: "claude-haiku-4-5",
-      max_tokens: 256,
-      system: SYSTEM_PROMPT,
+    const message = await openai.chat.completions.create({
+      model: "gpt-5-mini",
+      max_completion_tokens: 256,
       messages: [
-        {
-          role: "user",
-          content: transcript,
-        },
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: transcript },
       ],
     });
 
-    const text = message.content[0].type === "text" ? message.content[0].text : "{}";
+    const text = message.choices[0]?.message?.content ?? "{}";
     const parsed = JSON.parse(text);
 
     res.json({

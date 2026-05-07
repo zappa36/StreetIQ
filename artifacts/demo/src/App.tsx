@@ -1,42 +1,803 @@
-import { Switch, Route, Router as WouterRouter } from "wouter";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Toaster } from "@/components/ui/toaster";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import NotFound from "@/pages/not-found";
+import React, { createContext, useContext, useReducer, useEffect, useRef } from "react";
+import { Mic, MicOff, MapPin, AlertTriangle, CheckCircle, Package, Truck, Clock, Navigation } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Button } from "@/components/ui/button";
 
-const queryClient = new QueryClient();
+// --- Types ---
+type DriverState = "Driving" | "Approaching" | "Parked";
+type ParcelStatus = "pending" | "in_transit" | "delivered" | "rescheduled" | "delayed" | "failed";
 
-function Home() {
+interface Parcel {
+  id: string;
+  address: string;
+  customer: string;
+  driver: "Driver A" | "Driver B";
+  eta: string;
+  status: ParcelStatus;
+}
+
+interface EventLog {
+  id: string;
+  timestamp: string;
+  message: string;
+}
+
+interface ParkingSpot {
+  id: string;
+  x: number;
+  y: number;
+  confirmations: number;
+  label: string;
+}
+
+interface AppState {
+  driverAState: DriverState;
+  driverBState: DriverState;
+  parcels: Parcel[];
+  events: EventLog[];
+  mapVisible: boolean;
+  roadClosed: boolean;
+  driverBAlertVisible: boolean;
+  driverBRerouteAccepted: boolean | null;
+  heatmapSpots: ParkingSpot[];
+  transcript: string;
+  lastIntent: string;
+  lastEntity: string;
+  isListening: boolean;
+  isRunningDemo: boolean;
+}
+
+type Action =
+  | { type: "SET_DRIVER_A_STATE"; payload: DriverState }
+  | { type: "SET_DRIVER_B_STATE"; payload: DriverState }
+  | { type: "ADD_EVENT"; payload: string }
+  | { type: "SET_MAP_VISIBLE"; payload: boolean }
+  | { type: "SET_ROAD_CLOSED"; payload: boolean }
+  | { type: "SET_B_ALERT_VISIBLE"; payload: boolean }
+  | { type: "SET_B_REROUTE_ACCEPTED"; payload: boolean }
+  | { type: "INCREMENT_PARKING"; payload: string }
+  | { type: "SET_TRANSCRIPT"; payload: string }
+  | { type: "SET_INTENT"; payload: { intent: string; entity: string } }
+  | { type: "SET_LISTENING"; payload: boolean }
+  | { type: "SET_RUNNING_DEMO"; payload: boolean }
+  | { type: "UPDATE_PARCELS"; payload: Parcel[] }
+  | { type: "RESET_DEMO" };
+
+// --- Mock Data ---
+const INITIAL_PARCELS: Parcel[] = [
+  { id: "P001", address: "12 Oak St", customer: "Alice Chen", driver: "Driver A", eta: "14:20", status: "pending" },
+  { id: "P002", address: "34 Maple Ave", customer: "Bob Torres", driver: "Driver A", eta: "14:35", status: "pending" },
+  { id: "P003", address: "56 Pine Rd", customer: "Carol Wu", driver: "Driver A", eta: "14:50", status: "pending" },
+  { id: "P004", address: "78 Maple St", customer: "David Kim", driver: "Driver B", eta: "14:25", status: "pending" },
+  { id: "P005", address: "91 Elm Blvd", customer: "Emma Park", driver: "Driver B", eta: "14:40", status: "pending" },
+  { id: "P006", address: "103 Cedar Ln", customer: "Frank Li", driver: "Driver B", eta: "14:55", status: "pending" },
+];
+
+const INITIAL_SPOTS: ParkingSpot[] = [
+  { id: "P-1", x: 80, y: 60, confirmations: 8, label: "Oak St N" },
+  { id: "P-2", x: 150, y: 90, confirmations: 5, label: "Oak St S" },
+  { id: "P-3", x: 220, y: 70, confirmations: 2, label: "Maple Ave" },
+  { id: "P-4", x: 300, y: 120, confirmations: 0, label: "Pine Rd E" },
+  { id: "P-5", x: 100, y: 180, confirmations: 11, label: "Oak/Elm" },
+  { id: "P-6", x: 250, y: 160, confirmations: 3, label: "Maple St W" },
+  { id: "P-7", x: 370, y: 90, confirmations: 6, label: "Cedar Ln" },
+  { id: "P-8", x: 320, y: 200, confirmations: 1, label: "Pine/Cedar" },
+  { id: "P-9", x: 180, y: 220, confirmations: 9, label: "Elm Blvd" },
+  { id: "P-10", x: 400, y: 160, confirmations: 4, label: "Cedar S" },
+];
+
+const initialState: AppState = {
+  driverAState: "Driving",
+  driverBState: "Driving",
+  parcels: INITIAL_PARCELS,
+  events: [],
+  mapVisible: false,
+  roadClosed: false,
+  driverBAlertVisible: false,
+  driverBRerouteAccepted: null,
+  heatmapSpots: INITIAL_SPOTS,
+  transcript: "",
+  lastIntent: "",
+  lastEntity: "",
+  isListening: false,
+  isRunningDemo: false,
+};
+
+// --- Helper ---
+function addMinutes(timeStr: string, mins: number): string {
+  const [h, m] = timeStr.split(":").map(Number);
+  const total = h * 60 + m + mins;
+  const newH = Math.floor(total / 60) % 24;
+  const newM = total % 60;
+  return `${newH.toString().padStart(2, "0")}:${newM.toString().padStart(2, "0")}`;
+}
+
+// --- Reducer ---
+function reducer(state: AppState, action: Action): AppState {
+  switch (action.type) {
+    case "SET_DRIVER_A_STATE": {
+      let newState = { ...state, driverAState: action.payload };
+      if (action.payload === "Approaching") {
+        newState.mapVisible = true;
+      } else if (action.payload === "Parked" && state.driverAState !== "Parked") {
+        // Increment nearest spot logic roughly simulated by just picking P-2
+        newState.heatmapSpots = state.heatmapSpots.map((s) =>
+          s.id === "P-2" ? { ...s, confirmations: s.confirmations + 1 } : s
+        );
+      }
+      return newState;
+    }
+    case "SET_DRIVER_B_STATE":
+      return { ...state, driverBState: action.payload };
+    case "ADD_EVENT": {
+      const now = new Date();
+      const timeStr = `${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}:${now.getSeconds().toString().padStart(2, "0")}`;
+      const newEvent = { id: Math.random().toString(), timestamp: timeStr, message: action.payload };
+      return { ...state, events: [newEvent, ...state.events].slice(0, 20) };
+    }
+    case "SET_MAP_VISIBLE":
+      return { ...state, mapVisible: action.payload };
+    case "SET_ROAD_CLOSED":
+      return { ...state, roadClosed: action.payload };
+    case "SET_B_ALERT_VISIBLE":
+      return { ...state, driverBAlertVisible: action.payload };
+    case "SET_B_REROUTE_ACCEPTED":
+      return { ...state, driverBRerouteAccepted: action.payload };
+    case "INCREMENT_PARKING":
+      return {
+        ...state,
+        heatmapSpots: state.heatmapSpots.map((s) => (s.id === action.payload ? { ...s, confirmations: s.confirmations + 1 } : s)),
+      };
+    case "SET_TRANSCRIPT":
+      return { ...state, transcript: action.payload };
+    case "SET_INTENT":
+      return { ...state, lastIntent: action.payload.intent, lastEntity: action.payload.entity };
+    case "SET_LISTENING":
+      return { ...state, isListening: action.payload };
+    case "SET_RUNNING_DEMO":
+      return { ...state, isRunningDemo: action.payload };
+    case "UPDATE_PARCELS":
+      return { ...state, parcels: action.payload };
+    case "RESET_DEMO":
+      return initialState;
+    default:
+      return state;
+  }
+}
+
+// --- Context ---
+const DemoContext = createContext<{ state: AppState; dispatch: React.Dispatch<Action>; processIntent: (intent: string, entity: string) => void } | null>(null);
+
+function useDemo() {
+  const ctx = useContext(DemoContext);
+  if (!ctx) throw new Error("useDemo must be used within DemoProvider");
+  return ctx;
+}
+
+// --- Main App Component ---
+export default function App() {
+  const [state, dispatch] = useReducer(reducer, initialState);
+
+  const processIntent = (intent: string, entity: string) => {
+    dispatch({ type: "SET_INTENT", payload: { intent, entity } });
+
+    if (intent === "road_closed") {
+      dispatch({ type: "SET_ROAD_CLOSED", payload: true });
+      dispatch({ type: "ADD_EVENT", payload: `Driver A: road_closed "${entity || 'Maple Ave'}"` });
+      dispatch({ type: "ADD_EVENT", payload: `REROUTE ALERT: Generating alternate routes...` });
+      
+      const newParcels = state.parcels.map((p) => {
+        if (p.id === "P001" || p.id === "P002") {
+          return { ...p, status: "delayed" as ParcelStatus, eta: addMinutes(p.eta, 15) };
+        }
+        return p;
+      });
+      dispatch({ type: "UPDATE_PARCELS", payload: newParcels });
+
+      setTimeout(async () => {
+        dispatch({ type: "SET_B_ALERT_VISIBLE", payload: true });
+        try {
+          const ttsRes = await fetch("/api/tts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: "A colleague just reported Maple Street is closed. Want me to show an alternate route?", voice: "nova" })
+          });
+          if (ttsRes.ok) {
+            const blob = await ttsRes.blob();
+            const url = URL.createObjectURL(blob);
+            const audio = new Audio(url);
+            audio.play();
+          }
+        } catch (e) {
+          console.warn("TTS unavailable:", e);
+        }
+      }, 2500);
+
+    } else if (intent === "parking_issue") {
+      dispatch({ type: "ADD_EVENT", payload: `Driver A: parking_issue reported` });
+      const newParcels = state.parcels.map((p) => (p.id === "P001" ? { ...p, status: "delayed" as ParcelStatus, eta: addMinutes(p.eta, 10) } : p));
+      dispatch({ type: "UPDATE_PARCELS", payload: newParcels });
+
+    } else if (intent === "customer_not_home") {
+      dispatch({ type: "ADD_EVENT", payload: `Driver A: customer_not_home` });
+      const newParcels = state.parcels.map((p) => (p.id === "P001" ? { ...p, status: "rescheduled" as ParcelStatus, eta: "17:00" } : p));
+      dispatch({ type: "UPDATE_PARCELS", payload: newParcels });
+
+    } else if (intent === "delivery_complete") {
+      dispatch({ type: "ADD_EVENT", payload: `Driver A: delivery_complete P001` });
+      const newParcels = state.parcels.map((p) => (p.id === "P001" ? { ...p, status: "delivered" as ParcelStatus } : p));
+      dispatch({ type: "UPDATE_PARCELS", payload: newParcels });
+      dispatch({ type: "SET_DRIVER_A_STATE", payload: "Driving" });
+      dispatch({ type: "SET_MAP_VISIBLE", payload: false });
+
+    } else if (intent === "request_map") {
+      dispatch({ type: "ADD_EVENT", payload: `Driver A: request_map` });
+      dispatch({ type: "SET_MAP_VISIBLE", payload: true });
+    }
+  };
+
+  const handleRunDemo = () => {
+    dispatch({ type: "RESET_DEMO" });
+    dispatch({ type: "SET_RUNNING_DEMO", payload: true });
+    
+    // Auto-script sequence
+    setTimeout(() => {
+      dispatch({ type: "SET_DRIVER_A_STATE", payload: "Approaching" });
+      dispatch({ type: "ADD_EVENT", payload: `Driver A approaching P001` });
+    }, 500);
+
+    setTimeout(() => {
+      dispatch({ type: "SET_TRANSCRIPT", payload: "road is closed on Maple Street" });
+      processIntent("road_closed", "Maple Street");
+    }, 2000);
+
+    setTimeout(() => {
+      // simulate Driver B pressing yes
+      dispatch({ type: "SET_B_REROUTE_ACCEPTED", payload: true });
+      dispatch({ type: "SET_B_ALERT_VISIBLE", payload: false });
+      const newParcels = state.parcels.map(p => p.id === "P004" ? { ...p, eta: addMinutes(p.eta, 15) } : p);
+      dispatch({ type: "UPDATE_PARCELS", payload: newParcels });
+      dispatch({ type: "ADD_EVENT", payload: `Driver B accepted reroute for P004` });
+      dispatch({ type: "SET_RUNNING_DEMO", payload: false });
+    }, 8000);
+  };
+
   return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-gray-50">
-      <div className="text-center">
-        <h1 className="text-2xl font-bold text-gray-900">Replit Agent is building...</h1>
-        <p className="mt-2 text-sm text-gray-600">Your app will appear here once it's ready.</p>
+    <DemoContext.Provider value={{ state, dispatch, processIntent }}>
+      <div className="min-h-screen w-full bg-slate-100 flex flex-col font-sans overflow-hidden text-slate-900">
+        
+        {/* Simulation Controls */}
+        <div className="h-10 bg-slate-900 text-slate-200 flex items-center px-4 shrink-0 shadow-sm z-50 text-sm font-medium">
+          <div className="flex items-center gap-2 mr-8">
+            <span className="text-slate-400">Driver A:</span>
+            <div className="flex gap-1">
+              {(["Driving", "Approaching", "Parked"] as DriverState[]).map(s => (
+                <button
+                  key={s}
+                  data-testid={`btn-sim-a-${s}`}
+                  onClick={() => dispatch({ type: "SET_DRIVER_A_STATE", payload: s })}
+                  className={`px-2 py-0.5 rounded text-xs transition-colors ${state.driverAState === s ? "bg-blue-600 text-white" : "bg-slate-800 hover:bg-slate-700"}`}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-slate-400">Driver B:</span>
+            <div className="flex gap-1">
+              {(["Driving", "Approaching", "Parked"] as DriverState[]).map(s => (
+                <button
+                  key={s}
+                  data-testid={`btn-sim-b-${s}`}
+                  onClick={() => dispatch({ type: "SET_DRIVER_B_STATE", payload: s })}
+                  className={`px-2 py-0.5 rounded text-xs transition-colors ${state.driverBState === s ? "bg-blue-600 text-white" : "bg-slate-800 hover:bg-slate-700"}`}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="ml-auto flex items-center gap-3">
+            {state.isRunningDemo && <span className="text-amber-400 animate-pulse text-xs font-mono">Demo running...</span>}
+            <button 
+              data-testid="btn-sim-reset"
+              onClick={() => dispatch({ type: "RESET_DEMO" })}
+              className="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs transition-colors"
+            >
+              Reset Demo
+            </button>
+            <button 
+              data-testid="btn-sim-run"
+              onClick={handleRunDemo}
+              disabled={state.isRunningDemo}
+              className="px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs flex items-center gap-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              ▶ Run Demo
+            </button>
+          </div>
+        </div>
+
+        {/* 2x2 Grid */}
+        <div className="flex-1 grid grid-cols-2 grid-rows-2 gap-px bg-slate-300">
+          {/* Panel 1 */}
+          <div className="bg-white relative overflow-hidden flex flex-col">
+            <div className="absolute top-0 left-0 bg-slate-100 text-slate-500 text-xs font-mono px-3 py-1 font-semibold uppercase tracking-widest border-b border-r border-slate-200 z-10 rounded-br-lg">
+              Panel 1 — Voice Cockpit
+            </div>
+            <PanelOne />
+          </div>
+
+          {/* Panel 2 */}
+          <div className="bg-slate-50 relative overflow-hidden flex flex-col">
+            <div className="absolute top-0 left-0 bg-slate-200 text-slate-500 text-xs font-mono px-3 py-1 font-semibold uppercase tracking-widest border-b border-r border-slate-300 z-10 rounded-br-lg">
+              Panel 2 — Adaptive Map
+            </div>
+            <PanelTwo />
+          </div>
+
+          {/* Panel 3 */}
+          <div className="bg-white relative overflow-hidden flex flex-col border-t border-slate-200">
+            <div className="absolute top-0 left-0 bg-slate-100 text-slate-500 text-xs font-mono px-3 py-1 font-semibold uppercase tracking-widest border-b border-r border-slate-200 z-10 rounded-br-lg">
+              Panel 3 — Dispatch Dashboard
+            </div>
+            <PanelThree />
+          </div>
+
+          {/* Panel 4 */}
+          <div className="bg-slate-50 relative overflow-hidden flex flex-col border-t border-slate-200">
+            <div className="absolute top-0 left-0 bg-slate-200 text-slate-500 text-xs font-mono px-3 py-1 font-semibold uppercase tracking-widest border-b border-r border-slate-300 z-10 rounded-br-lg">
+              Panel 4 — Proactive Copilot
+            </div>
+            <PanelFour />
+          </div>
+        </div>
+
       </div>
+    </DemoContext.Provider>
+  );
+}
+
+// --- Panel 1: Voice Cockpit ---
+function PanelOne() {
+  const { state, dispatch, processIntent } = useDemo();
+  
+  const handleMicClick = async () => {
+    if (state.isListening) return;
+    
+    dispatch({ type: "SET_LISTENING", payload: true });
+    
+    try {
+      // @ts-ignore - web speech api
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        const recognition = new SpeechRecognition();
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        
+        recognition.onresult = async (event: any) => {
+          const transcript = event.results[0][0].transcript;
+          dispatch({ type: "SET_TRANSCRIPT", payload: transcript });
+          await classifyTranscript(transcript);
+          dispatch({ type: "SET_LISTENING", payload: false });
+        };
+        
+        recognition.onerror = () => {
+          dispatch({ type: "SET_LISTENING", payload: false });
+        };
+        
+        recognition.start();
+      } else {
+        // Fallback for browsers without speech API in this demo context
+        setTimeout(async () => {
+          const fallback = "road is closed on Maple Street";
+          dispatch({ type: "SET_TRANSCRIPT", payload: fallback });
+          await classifyTranscript(fallback);
+          dispatch({ type: "SET_LISTENING", payload: false });
+        }, 2000);
+      }
+    } catch (e) {
+      dispatch({ type: "SET_LISTENING", payload: false });
+    }
+  };
+
+  const classifyTranscript = async (text: string) => {
+    try {
+      const res = await fetch("/api/classify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transcript: text })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        processIntent(data.intent, data.entity);
+        return;
+      }
+    } catch (e) {
+      // fallback
+    }
+    
+    // Keyword fallback
+    const lower = text.toLowerCase();
+    if (lower.includes("closed") || lower.includes("blocked")) processIntent("road_closed", "Maple Street");
+    else if (lower.includes("parking") || lower.includes("park")) processIntent("parking_issue", "");
+    else if (lower.includes("not home") || lower.includes("nobody")) processIntent("customer_not_home", "");
+    else if (lower.includes("delivered") || lower.includes("done")) processIntent("delivery_complete", "");
+    else if (lower.includes("map") || lower.includes("navigate")) processIntent("request_map", "");
+    else processIntent("general", "");
+  };
+
+  const aParcel = state.parcels.find(p => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed"));
+  
+  return (
+    <div className="flex-1 flex flex-col p-6 pt-12 items-center justify-center relative">
+      
+      {/* State Badge */}
+      <div className="absolute top-4 right-4 flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-full border border-slate-200">
+        <div className={`w-2 h-2 rounded-full ${state.driverAState === 'Driving' ? 'bg-blue-500' : state.driverAState === 'Approaching' ? 'bg-amber-500' : 'bg-emerald-500'}`} />
+        <span className="text-sm font-medium text-slate-700">{state.driverAState}</span>
+      </div>
+
+      {/* Current Parcel Card */}
+      {aParcel && (
+        <div className="mb-8 w-full max-w-sm bg-white border border-slate-200 rounded-xl shadow-sm p-4 flex flex-col gap-2">
+          <div className="flex justify-between items-start">
+            <div className="flex items-center gap-2 text-slate-500 font-mono text-xs">
+              <Package size={14} /> {aParcel.id}
+            </div>
+            <div className="text-right">
+              <div className="text-xl font-bold text-slate-900 leading-none">{aParcel.eta}</div>
+              <div className="text-xs text-slate-500 font-mono">ETA</div>
+            </div>
+          </div>
+          <div>
+            <div className="text-lg font-semibold text-slate-900">{aParcel.address}</div>
+            <div className="text-sm text-slate-600">{aParcel.customer}</div>
+          </div>
+        </div>
+      )}
+
+      {/* Mic Button */}
+      <div className="relative mb-12">
+        {state.isListening && (
+          <motion.div
+            className="absolute inset-0 bg-blue-500/20 rounded-full"
+            animate={{ scale: [1, 1.5, 1], opacity: [0.5, 0, 0.5] }}
+            transition={{ repeat: Infinity, duration: 1.5 }}
+          />
+        )}
+        <button
+          data-testid="btn-mic"
+          onClick={handleMicClick}
+          className={`relative z-10 w-24 h-24 rounded-full flex items-center justify-center shadow-lg transition-all
+            ${state.isListening ? 'bg-blue-600 text-white scale-95 shadow-inner' : 'bg-white text-blue-600 hover:bg-blue-50 border-2 border-blue-100'}`}
+        >
+          <Mic size={36} strokeWidth={2.5} />
+        </button>
+      </div>
+
+      {/* Transcript Area */}
+      <div className="w-full max-w-sm h-32 flex flex-col items-center justify-start text-center">
+        {state.isListening ? (
+          <div className="text-slate-500 font-medium flex items-center gap-2 animate-pulse">
+            Listening...
+          </div>
+        ) : state.transcript ? (
+          <>
+            <p className="text-lg text-slate-800 font-medium italic">"{state.transcript}"</p>
+            {state.lastIntent && (
+              <div className="mt-4 inline-flex items-center gap-2 bg-slate-100 px-3 py-1 rounded border border-slate-200 font-mono text-xs text-slate-600">
+                <span className="font-bold text-blue-600">{state.lastIntent}</span>
+                {state.lastEntity && <span className="bg-slate-200 px-1.5 rounded">{state.lastEntity}</span>}
+              </div>
+            )}
+          </>
+        ) : (
+          <p className="text-slate-400 text-sm">Tap mic to speak to FleetMind...</p>
+        )}
+      </div>
+
     </div>
   );
 }
 
-function Router() {
+// --- Panel 2: Adaptive Map ---
+function PanelTwo() {
+  const { state } = useDemo();
+
   return (
-    <Switch>
-      <Route path="/" component={Home} />
-      <Route component={NotFound} />
-    </Switch>
+    <div className="flex-1 relative overflow-hidden bg-[#eef2f6]">
+      <AnimatePresence>
+        {state.mapVisible && (
+          <motion.div 
+            initial={{ x: "100%", opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: "100%", opacity: 0 }}
+            transition={{ type: "spring", damping: 25, stiffness: 200 }}
+            className="absolute inset-0 p-8 pt-12 flex flex-col items-center justify-center"
+          >
+            <div className="w-full h-full max-w-lg bg-white rounded-xl shadow-md border border-slate-200 overflow-hidden relative">
+              <svg viewBox="0 0 480 280" className="w-full h-full text-slate-300">
+                {/* Base Streets */}
+                <line x1="30" y1="50" x2="430" y2="50" stroke="currentColor" strokeWidth="8" strokeLinecap="round" />
+                <line x1="30" y1="130" x2="430" y2="130" stroke="currentColor" strokeWidth="8" strokeLinecap="round" />
+                <line x1="30" y1="220" x2="430" y2="220" stroke="currentColor" strokeWidth="8" strokeLinecap="round" />
+                <line x1="120" y1="20" x2="120" y2="280" stroke="currentColor" strokeWidth="8" strokeLinecap="round" />
+                <line x1="300" y1="20" x2="300" y2="280" stroke="currentColor" strokeWidth="8" strokeLinecap="round" />
+
+                {/* Default Route */}
+                {!state.roadClosed && (
+                  <polyline 
+                    points="30,50 120,50 120,130 300,130 300,220 430,220" 
+                    fill="none" stroke="#3b82f6" strokeWidth="4" strokeLinejoin="round" 
+                  />
+                )}
+
+                {/* Alternate Route (Road Closed) */}
+                {state.roadClosed && (
+                  <>
+                    <line x1="220" y1="120" x2="240" y2="140" stroke="#ef4444" strokeWidth="4" />
+                    <line x1="240" y1="120" x2="220" y2="140" stroke="#ef4444" strokeWidth="4" />
+                    <polyline 
+                      points="30,50 120,50 120,20 300,20 300,130 430,130" 
+                      fill="none" stroke="#f97316" strokeWidth="4" strokeDasharray="6 4" strokeLinejoin="round"
+                    />
+                  </>
+                )}
+
+                {/* Heatmap Spots */}
+                {state.heatmapSpots.map(s => {
+                  let fill = "#9ca3af";
+                  if (s.confirmations > 0 && s.confirmations <= 3) fill = "#86efac";
+                  else if (s.confirmations > 3 && s.confirmations <= 7) fill = "#22c55e";
+                  else if (s.confirmations > 7) fill = "#15803d";
+                  return (
+                    <circle key={s.id} cx={s.x} cy={s.y} r="12" fill={fill} opacity="0.85">
+                      <title>{s.label} ({s.confirmations} confirms)</title>
+                    </circle>
+                  )
+                })}
+                
+                {/* Truck marker */}
+                <circle cx={state.roadClosed ? 120 : 120} cy={state.roadClosed ? 50 : 130} r="6" fill="#1e293b" />
+              </svg>
+              
+              {state.roadClosed && (
+                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-white px-4 py-3 rounded-lg shadow-lg border border-orange-200 flex items-center gap-4">
+                  <div className="flex flex-col">
+                    <span className="font-bold text-slate-800 text-sm">Reroute Active</span>
+                    <span className="text-xs text-slate-500">+15 min delay</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" className="h-7 text-xs">Dismiss</Button>
+                    <Button size="sm" className="h-7 text-xs bg-orange-500 hover:bg-orange-600 text-white">Accept Route</Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      {!state.mapVisible && (
+        <div className="absolute inset-0 flex items-center justify-center text-slate-400 font-mono text-sm">
+          Map idle
+        </div>
+      )}
+    </div>
   );
 }
 
-function App() {
+// --- Panel 3: Dispatch Dashboard ---
+function PanelThree() {
+  const { state } = useDemo();
+
+  const getStatusColor = (status: string) => {
+    switch(status) {
+      case 'pending': return 'bg-slate-100 text-slate-600 border-slate-200';
+      case 'in_transit': return 'bg-blue-50 text-blue-700 border-blue-200';
+      case 'delivered': return 'bg-green-50 text-green-700 border-green-200';
+      case 'rescheduled': return 'bg-amber-50 text-amber-700 border-amber-200';
+      case 'delayed': return 'bg-orange-50 text-orange-700 border-orange-200';
+      case 'failed': return 'bg-red-50 text-red-700 border-red-200';
+      default: return 'bg-slate-100 text-slate-600 border-slate-200';
+    }
+  }
+
   return (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-          <Router />
-        </WouterRouter>
-        <Toaster />
-      </TooltipProvider>
-    </QueryClientProvider>
+    <div className="flex-1 flex overflow-hidden pt-10">
+      
+      {/* Table */}
+      <div className="flex-1 flex flex-col border-r border-slate-200">
+        <div className="flex-1 overflow-auto p-4">
+          <table className="w-full text-sm text-left">
+            <thead className="text-xs text-slate-500 uppercase bg-slate-50 border-b border-slate-200 sticky top-0 z-10 font-mono">
+              <tr>
+                <th className="px-4 py-3 font-medium">Parcel</th>
+                <th className="px-4 py-3 font-medium">Address</th>
+                <th className="px-4 py-3 font-medium">Driver</th>
+                <th className="px-4 py-3 font-medium text-right">ETA</th>
+                <th className="px-4 py-3 font-medium text-center">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {state.parcels.map((p) => (
+                <tr key={p.id} className="hover:bg-slate-50/50 transition-colors">
+                  <td className="px-4 py-3 font-mono text-slate-600">{p.id}</td>
+                  <td className="px-4 py-3">
+                    <div className="font-medium text-slate-900">{p.address}</div>
+                    <div className="text-xs text-slate-500">{p.customer}</div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-1.5 text-slate-700">
+                      <Truck size={14} className="text-slate-400" />
+                      {p.driver}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-right font-mono font-medium text-slate-800">
+                    {p.eta}
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider border ${getStatusColor(p.status)}`}>
+                      {p.status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Event Log */}
+      <div className="w-[30%] bg-slate-900 text-slate-300 flex flex-col font-mono text-xs">
+        <div className="p-3 border-b border-slate-800 text-slate-400 font-semibold tracking-widest uppercase flex items-center justify-between">
+          <span>System Log</span>
+          <div className="flex gap-1 items-center">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="text-[10px]">LIVE</span>
+          </div>
+        </div>
+        <div className="flex-1 overflow-auto p-4 space-y-3">
+          <AnimatePresence initial={false}>
+            {state.events.map((e) => (
+              <motion.div 
+                key={e.id}
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                className="leading-relaxed"
+              >
+                <span className="text-slate-500 mr-2">[{e.timestamp}]</span>
+                <span className={`${e.message.includes('ALERT') ? 'text-amber-400 font-bold' : 'text-slate-300'}`}>
+                  {e.message}
+                </span>
+              </motion.div>
+            ))}
+          </AnimatePresence>
+          {state.events.length === 0 && (
+            <div className="text-slate-600 italic">Waiting for events...</div>
+          )}
+        </div>
+      </div>
+
+    </div>
   );
 }
 
-export default App;
+// --- Panel 4: Proactive Alert ---
+function PanelFour() {
+  const { state, dispatch } = useDemo();
+  
+  const bParcel = state.parcels.find(p => p.driver === "Driver B" && p.status === "pending");
+
+  const handleAcceptReroute = () => {
+    dispatch({ type: "SET_B_REROUTE_ACCEPTED", payload: true });
+    // Apply delay to P004
+    const newParcels = state.parcels.map(p => p.id === "P004" ? { ...p, eta: addMinutes(p.eta, 15) } : p);
+    dispatch({ type: "UPDATE_PARCELS", payload: newParcels });
+    dispatch({ type: "ADD_EVENT", payload: `Driver B accepted proactive reroute for P004` });
+  };
+
+  const handleDismissAlert = () => {
+    dispatch({ type: "SET_B_ALERT_VISIBLE", payload: false });
+  };
+
+  return (
+    <div className="flex-1 flex flex-col p-6 pt-12 items-center justify-center relative">
+      
+      {/* State Badge */}
+      <div className="absolute top-4 right-4 flex items-center gap-2 bg-slate-200 px-3 py-1.5 rounded-full border border-slate-300">
+        <div className={`w-2 h-2 rounded-full ${state.driverBState === 'Driving' ? 'bg-blue-500' : state.driverBState === 'Approaching' ? 'bg-amber-500' : 'bg-emerald-500'}`} />
+        <span className="text-sm font-medium text-slate-700">{state.driverBState}</span>
+      </div>
+
+      <div className="w-full max-w-sm flex flex-col gap-6">
+        {/* Current Parcel */}
+        {bParcel && (
+          <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 flex flex-col gap-2">
+            <div className="flex justify-between items-start">
+              <div className="flex items-center gap-2 text-slate-500 font-mono text-xs">
+                <Package size={14} /> {bParcel.id}
+              </div>
+              <div className="text-right">
+                <div className="text-xl font-bold text-slate-900 leading-none">{bParcel.eta}</div>
+                <div className="text-xs text-slate-500 font-mono">ETA</div>
+              </div>
+            </div>
+            <div>
+              <div className="text-lg font-semibold text-slate-900">{bParcel.address}</div>
+              <div className="text-sm text-slate-600">{bParcel.customer}</div>
+            </div>
+          </div>
+        )}
+
+        {/* Proactive Alert Card */}
+        <AnimatePresence>
+          {state.driverBAlertVisible && !state.driverBRerouteAccepted && (
+            <motion.div 
+              initial={{ y: 20, opacity: 0, scale: 0.95 }}
+              animate={{ y: 0, opacity: 1, scale: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-amber-50 border-2 border-amber-200 rounded-xl p-5 shadow-lg relative overflow-hidden"
+            >
+              <div className="absolute top-0 left-0 w-1 h-full bg-amber-500" />
+              <div className="flex items-start gap-3 mb-4">
+                <AlertTriangle className="text-amber-500 shrink-0 mt-0.5" size={24} />
+                <div>
+                  <h3 className="font-bold text-amber-900 text-lg">Proactive Reroute</h3>
+                  <p className="text-amber-800/80 text-sm mt-1 leading-snug">
+                    A colleague reported Maple Street is closed. Want to use an alternate route?
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-2 w-full">
+                <Button variant="outline" className="flex-1 bg-white border-amber-200 text-amber-700 hover:bg-amber-100 hover:text-amber-900" onClick={handleDismissAlert}>
+                  No, Thanks
+                </Button>
+                <Button className="flex-1 bg-amber-500 hover:bg-amber-600 text-white shadow-sm" onClick={handleAcceptReroute}>
+                  Yes — Show Route
+                </Button>
+              </div>
+            </motion.div>
+          )}
+
+          {state.driverBRerouteAccepted && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm"
+            >
+              <div className="flex items-center gap-2 text-emerald-600 font-semibold mb-3">
+                <Navigation size={18} />
+                Alternate Route Active
+              </div>
+              <div className="w-full h-32 bg-slate-50 rounded-lg border border-slate-200 overflow-hidden">
+                <svg viewBox="0 0 480 280" className="w-full h-full text-slate-300">
+                  <line x1="30" y1="50" x2="430" y2="50" stroke="currentColor" strokeWidth="8" strokeLinecap="round" />
+                  <line x1="30" y1="130" x2="430" y2="130" stroke="currentColor" strokeWidth="8" strokeLinecap="round" />
+                  <line x1="300" y1="20" x2="300" y2="280" stroke="currentColor" strokeWidth="8" strokeLinecap="round" />
+                  
+                  {/* Original dashed */}
+                  <polyline points="30,130 300,130" fill="none" stroke="#94a3b8" strokeWidth="4" strokeDasharray="6 4" strokeLinejoin="round" />
+                  
+                  {/* Alternate Green */}
+                  <polyline points="30,130 30,50 300,50 300,130" fill="none" stroke="#10b981" strokeWidth="4" strokeLinejoin="round" />
+                  
+                  {/* Blockage */}
+                  <line x1="140" y1="120" x2="160" y2="140" stroke="#ef4444" strokeWidth="4" />
+                  <line x1="160" y1="120" x2="140" y2="140" stroke="#ef4444" strokeWidth="4" />
+                </svg>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {!state.driverBAlertVisible && !state.driverBRerouteAccepted && (
+           <div className="text-center text-slate-400 text-sm font-mono mt-8">
+             Awaiting intelligence...
+           </div>
+        )}
+      </div>
+
+    </div>
+  );
+}
