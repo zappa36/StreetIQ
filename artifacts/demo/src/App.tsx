@@ -1396,7 +1396,20 @@ function PanelOne() {
           {mode === "listening" ? "● rec" : mode === "speaking" ? "otto" : "speak"}
         </button>
         <div style={{ minHeight: 56, textAlign: "center", maxWidth: 320 }}>
-          {state.transcript ? (
+          {mode === "speaking" && state.spokenCaption ? (
+            <div
+              data-testid="spoken-caption"
+              style={{
+                fontFamily: FONT_HEAD,
+                fontStyle: "italic",
+                fontSize: 14,
+                color: SI.accentDeep,
+                lineHeight: 1.4,
+              }}
+            >
+              “{state.spokenCaption}”
+            </div>
+          ) : state.transcript ? (
             <>
               <div
                 style={{
