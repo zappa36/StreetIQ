@@ -1,0 +1,27 @@
+Refactor the StreetIQ demo (artifacts/demo/src/App.tsx and index.css) to match the new "BMW" UI direction. The previous 2×2 grid is replaced by a horizontal 1×4 panel layout with a clean, automotive-instrument aesthetic. Keep all existing state machine, voice flow, and reducer logic — only the visual layer and panel arrangement change.
+
+Design tokens (replace existing color/font tokens):
+
+Background: #F2F5F9 (panel bg), #F8FAFC (alternating panel bg), #FAFBFD (inner card surface), #FFFFFF (raised surface)
+Hairlines: #CFD6DF (primary), #DDE2EA (soft)
+Ink: #1C1B1A (primary), #5A5752 (secondary), #8E8B85 (faint)
+Accent (BMW blue): oklch(58% 0.16 250) base, oklch(42% 0.17 250) deep, oklch(94% 0.03 250) wash
+Secondary accents (use sparingly): amber oklch(56% 0.14 75) for proactive/approaching, rust oklch(48% 0.16 30) for alerts, ink-blue oklch(38% 0.11 245) for Driver B identity
+Headline font: Space Grotesk (500/600), Google Fonts
+Body: Inter (400/500/600)
+Mono: JetBrains Mono (for codes, timestamps, panel labels)
+Layout — 1600×900 stage, 4 equal-width panels side by side:
+
+Panel 01 — Voice Cockpit (Driver A): driver state pill, current parcel card, large circular speak button (88px), waveform bars, transcript with intent chip, quick-test phrase chips
+Panel 02 — Adaptive Map (Driver A, shared): hidden behind a dashed "Map idle" placeholder until needed; when active, shows street grid SVG, default route, and on road-closure shows a red X + amber dashed reroute, plus a "shared by 47 colleagues" parking heatmap
+Panel 03 — Dispatch: 6-parcel table (driver tag chip A/B with blue/ink-blue wash, address, status, ETA), bottom 220px live system log strip with pulsing dot
+Panel 04 — Proactive Copilot (Driver B): driver pill, current parcel card, proactive alert card with amber left-border "Otto · proactive alert" + Accept/Dismiss CTAs, mini map preview when accepted; otherwise dashed "Awaiting intelligence" placeholder
+Each panel has: a 3px vertical accent rule on the left edge of its header (color tied to the panel — blue/amber/rust/ink-blue respectively), a PANEL 01 mono label in the accent color, and the panel title in Space Grotesk. Panels are separated by 1px hairlines, no shadows.
+
+Top sim bar (44px): Driver A state buttons (Idle / Driving / Approaching), Driver B state buttons, Reset, "▶ Run Scripted Demo" CTA in BMW blue. Bottom status bar (26px) shows revision label and "BMW · ops console" mono text.
+
+Behavior — keep the existing closed-loop demo intact:
+
+Driver A says "Maple is closed" → road-closed flag flips → Panel 02 reveals the reroute → Panel 03 system log appends → Panel 04 fires the proactive alert for Driver B
+Voice mode cycles standby → listening → speaking; waveform animates only in active states
+Reference implementation: I'll attach StreetIQ.html + streetiq-panels.jsx from my prototype. Use those as the source of truth for spacing, copy, and exact SVG geometry — just port to the existing TypeScript/React + Tailwind stack and replace the old 2×2 layout.

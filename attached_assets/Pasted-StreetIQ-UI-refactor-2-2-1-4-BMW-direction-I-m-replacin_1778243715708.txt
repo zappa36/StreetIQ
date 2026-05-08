@@ -1,0 +1,44 @@
+StreetIQ — UI refactor: 2×2 → 1×4 BMW direction
+I'm replacing the existing demo UI with a new direction. Attached:
+
+README.md — full spec (design tokens, layout, behavior, content)
+streetiq-panels.jsx — implementation reference (component structure, copy, SVG geometry, state machine — port this to TS + Tailwind)
+StreetIQ.html — runnable visual ground-truth prototype (open it locally to see exact spacing, animation, and hover states)
+tweaks-panel.jsx — ignore, prototype-only helper
+StreetIQ-BMW-after.png — target visual
+StreetIQ-2x2-before.png — current state for reference
+Goal
+Refactor artifacts/demo/src/App.tsx and artifacts/demo/src/index.css to match the After screenshot. Do not start a new component tree — edit in place. All existing reducer logic, voice state machine, and scripted-demo behavior must keep working unchanged; only the visual layer and panel arrangement change.
+
+Source of truth (in order of authority)
+streetiq-panels.jsx — exact component structure, copy strings, padding/radii, SVG paths, conditional render rules
+README.md — design tokens, behavior loop, panel responsibilities
+StreetIQ-BMW-after.png — visual reference
+Key changes vs. the Before
+Layout: 2×2 grid → 1×4 horizontal panels, equal width, full-height, separated by 1px hairlines (no shadows, no rounded panel containers)
+Aesthetic: warm/dense → clean automotive instrument: cool silver-white background, BMW blue accent, Space Grotesk headlines, Inter body, JetBrains Mono for codes/timestamps
+Each panel header: 3px vertical accent rule on the left edge + PANEL 0N mono label in accent color + title in Space Grotesk + sub-label right-aligned
+Design tokens (replace existing)
+bg #F2F5F9, bgDeep #F8FAFC, surface #FAFBFD, surfaceUp #FFFFFF
+hair #CFD6DF, hairSoft #DDE2EA
+ink #1C1B1A, inkSoft #5A5752, inkFaint #8E8B85
+Primary accent (BMW blue): oklch(58% 0.16 250) / deep oklch(42% 0.17 250) / wash oklch(94% 0.03 250)
+Secondary accents (sparingly): amber oklch(56% 0.14 75) (proactive/approaching) · rust oklch(48% 0.16 30) (alerts) · ink-blue oklch(38% 0.11 245) (Driver B)
+Fonts via Google Fonts: Space+Grotesk:wght@400;500;600;700, Inter:wght@400;500;600;700, JetBrains+Mono:wght@400;500;700
+Panels (1600×900 stage, 4 equal columns)
+Panel 01 — Voice Cockpit (Driver A, blue accent): driver state pill, current parcel card (P-001 · 12 Oak St · Alice Chen · ETA 14:20), 88px circular speak button, B-style waveform bars, transcript with intent chip, quick-test phrase chips
+Panel 02 — Adaptive Map (amber accent): hidden behind dashed "Map idle" placeholder until needed; when active, SVG street grid + default route + (on closure) red X on Maple + amber dashed reroute, plus parking heatmap with "shared by 47 colleagues"
+Panel 03 — Dispatch (rust accent): 6-parcel table (ID, stop+customer, status pill, driver tag chip A=blue / B=ink-blue, ETA), bottom 220px live system log strip with pulsing dot
+Panel 04 — Proactive Copilot (Driver B, ink-blue accent): driver pill, current parcel card (P-004 · 78 Maple St · David Kim · ETA 14:25), proactive alert card with amber left-border + "Otto · proactive alert" + Accept/Dismiss; when accepted shows mini map preview, otherwise dashed "Awaiting intelligence"
+Top sim bar (44px) and bottom status bar (26px)
+Top: Driver A state buttons (Idle / Driving / Approaching), Driver B state buttons, Reset, ▶ Run Scripted Demo CTA in BMW blue
+Bottom: revision label left, "BMW · ops console" mono right
+Closed-loop behavior (must remain)
+Driver A says "Maple is closed" → road-closed flag flips → Panel 02 reveals reroute → Panel 03 system log appends → Panel 04 fires proactive alert for Driver B. Voice mode cycles standby → listening → speaking; waveform animates only in active states.
+
+Acceptance
+ Visual diff matches StreetIQ-BMW-after.png at 1600×900
+ npm run dev boots without errors
+ Run Scripted Demo executes the full A → dispatch → B loop end-to-end
+ No new dependencies (use existing Tailwind + React + TS stack)
+Start by reading README.md and streetiq-panels.jsx end-to-end before touching App.tsx. If anything in the spec conflicts with the existing reducer's API, keep the reducer and adapt the UI, not the other way around.
