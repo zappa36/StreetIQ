@@ -1436,6 +1436,11 @@ function PanelOne() {
   const handleDelayDetails = async (text: string, pending: Extract<PendingFollowUp, { type: "delay_details" }>) => {
     let minutes = pending.knownMinutes ?? 10;
     let reason = pending.knownReason ?? "unspecified";
+    // Only treat the AI/keyword duration as authoritative when the driver's
+    // follow-up actually mentions a duration — otherwise we'd clobber the
+    // minutes captured on the first turn (e.g. "5 min") with the AI default.
+    const mentionsDuration = /\b(\d+|an|a|half|one|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty|forty|fifty|sixty)\s*(?:minute|min|hour|hr)\b/i.test(text)
+      || /\bhalf an hour\b/i.test(text);
     try {
       const res = await fetch("/api/classify", {
         method: "POST",
@@ -1444,17 +1449,27 @@ function PanelOne() {
       });
       if (res.ok) {
         const data = await res.json();
-        if (Number.isFinite(data.minutes)) minutes = Math.max(1, Math.round(data.minutes));
-        if (typeof data.reason === "string" && data.reason.length > 0) reason = data.reason;
+        if (mentionsDuration && Number.isFinite(data.minutes)) minutes = Math.max(1, Math.round(data.minutes));
+        if (typeof data.reason === "string" && data.reason.length > 0 && data.reason !== "unspecified") reason = data.reason;
       } else {
         const fb = parseDelayKeywords(text);
-        minutes = fb.minutes;
-        reason = fb.reason;
+        if (mentionsDuration) minutes = fb.minutes;
+        if (fb.reason !== "unspecified") reason = fb.reason;
       }
     } catch {
       const fb = parseDelayKeywords(text);
-      minutes = fb.minutes;
-      reason = fb.reason;
+      if (mentionsDuration) minutes = fb.minutes;
+      if (fb.reason !== "unspecified") reason = fb.reason;
+    }
+    // Catch a reason the keyword list missed (e.g. "car broke down") so we
+    // don't fall back to "unspecified" when the driver clearly stated one.
+    if (reason === "unspecified") {
+      const lower = text.toLowerCase();
+      if (lower.includes("broke down") || lower.includes("breakdown")) reason = "vehicle broke down";
+      else if (lower.includes("engine")) reason = "engine trouble";
+      else if (lower.includes("battery")) reason = "battery issue";
+      else if (lower.includes("park")) reason = "parking trouble";
+      else if (text.trim().length > 0) reason = text.trim().slice(0, 60);
     }
     dispatch({ type: "SET_INTENT", payload: { intent: "delay_details", entity: `+${minutes}min · ${reason}` } });
     dispatch({ type: "APPLY_DELAY", payload: { parcelId: pending.parcelId, minutes, reason } });
