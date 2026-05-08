@@ -145,12 +145,12 @@
   }
 }
 
-@keyframes siBar {
+@keyframes si-bar {
   0% { transform: scaleY(0.32); }
   100% { transform: scaleY(1); }
 }
 
-@keyframes siLivePulse {
+@keyframes si-live-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
 }

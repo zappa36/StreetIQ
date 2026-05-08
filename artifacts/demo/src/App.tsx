@@ -423,7 +423,7 @@ function SIWave({ mode, compact = false }: { mode: "standby" | "listening" | "sp
             background: color,
             height: h,
             opacity: active ? 0.95 : 0.28,
-            animation: active ? `siBar 0.9s ease-in-out ${i * 0.05}s infinite alternate` : "none",
+            animation: active ? `si-bar 0.9s ease-in-out ${i * 0.05}s infinite alternate` : "none",
           }}
         />
       ))}
@@ -609,10 +609,10 @@ function TopBar({
               fontSize: 10,
               color: SI.amberDeep,
               letterSpacing: "0.14em",
-              animation: "siLivePulse 1.6s ease-in-out infinite",
+              animation: "si-live-pulse 1.6s ease-in-out infinite",
             }}
           >
-            DEMO RUNNING
+● DEMO RUNNING
           </span>
         )}
         <button
@@ -1848,7 +1848,7 @@ function PanelThree() {
                 height: 6,
                 borderRadius: "50%",
                 background: SI.accent,
-                animation: "siLivePulse 1.6s ease-in-out infinite",
+                animation: "si-live-pulse 1.6s ease-in-out infinite",
               }}
             />
             <span style={{ fontFamily: FONT_MONO, fontSize: 9, color: SI.accentDeep, letterSpacing: "0.18em", fontWeight: 700 }}>LIVE</span>
