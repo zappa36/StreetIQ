@@ -914,8 +914,8 @@ export default function App() {
       >
         <TopBar state={state} dispatch={dispatch} onRunDemo={handleRunDemo} onReset={handleReset} />
 
-        {/* 1×4 panel row */}
-        <div style={{ flex: 1, display: "flex", minHeight: 0, minWidth: 0 }}>
+        {/* 1×4 panel row — falls back to horizontal scroll under 1280px */}
+        <div className="si-panel-row" style={{ flex: 1, display: "flex", minHeight: 0, minWidth: 0, overflowX: "auto" }}>
           <PanelShell index="01" title="Voice Cockpit" sub="Driver A" tone="accent" bg={SI.bg}>
             <PanelOne />
           </PanelShell>
@@ -2004,7 +2004,7 @@ function PanelFour() {
               marginBottom: 4,
             }}
           >
-            StreetIQ · proactive alert
+            Otto · proactive alert
           </div>
           <div style={{ fontFamily: FONT_HEAD, fontSize: 14, color: SI.ink, lineHeight: 1.4 }}>
             Driver A reports Maple Street is closed. Reroute via 2nd Ave adds ~15 min.

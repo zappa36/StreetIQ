@@ -154,3 +154,21 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
 }
+
+/* Responsive fallback for the 1×4 panel row */
+@media (max-width: 1279px) {
+  .si-panel-row > * {
+    min-width: 320px;
+    flex: 0 0 320px;
+  }
+}
+@media (max-width: 767px) {
+  .si-panel-row {
+    flex-wrap: wrap !important;
+    overflow-x: visible !important;
+  }
+  .si-panel-row > * {
+    flex: 1 1 50% !important;
+    min-width: 50% !important;
+  }
+}
