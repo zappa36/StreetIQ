@@ -92,6 +92,7 @@ interface AppState {
   isRunningDemo: boolean;
   scenarioIdx: number;
   awaitingScenarioStart: boolean;
+  currentParcelId: string | null;
   pendingFollowUp: PendingFollowUp | null;
 }
 
@@ -119,6 +120,7 @@ type Action =
   | { type: "SET_SPOKEN_CAPTION"; payload: string }
   | { type: "SET_RUNNING_DEMO"; payload: boolean }
   | { type: "SET_SCENARIO_GATE"; payload: { idx: number; awaiting: boolean } }
+  | { type: "SET_CURRENT_PARCEL"; payload: { parcelId: string } }
   | { type: "UPDATE_PARCELS"; payload: Parcel[] }
   | { type: "SET_PENDING_FOLLOWUP"; payload: PendingFollowUp }
   | { type: "CLEAR_PENDING_FOLLOWUP" }
@@ -170,6 +172,7 @@ const initialState: AppState = {
   isRunningDemo: false,
   scenarioIdx: -1,
   awaitingScenarioStart: false,
+  currentParcelId: "P001",
   pendingFollowUp: null,
 };
 
@@ -311,13 +314,20 @@ function reducer(state: AppState, action: Action): AppState {
           p.id === "P001" ? { ...p, status: "delivered" as ParcelStatus } : p
         ),
       };
-    case "COMPLETE_PARCEL":
-      return {
-        ...state,
-        parcels: state.parcels.map((p) =>
-          p.id === action.payload.parcelId ? { ...p, status: "delivered" as ParcelStatus } : p
-        ),
-      };
+    case "COMPLETE_PARCEL": {
+      const updatedParcels = state.parcels.map((p) =>
+        p.id === action.payload.parcelId ? { ...p, status: "delivered" as ParcelStatus } : p
+      );
+      // If we just completed the current parcel, advance to next open Driver A stop.
+      let nextCurrent = state.currentParcelId;
+      if (state.currentParcelId === action.payload.parcelId) {
+        const nextOpen = updatedParcels.find(
+          (p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed")
+        );
+        nextCurrent = nextOpen ? nextOpen.id : null;
+      }
+      return { ...state, parcels: updatedParcels, currentParcelId: nextCurrent };
+    }
     case "DRIVER_B_ACCEPT_REROUTE":
       return {
         ...state,
@@ -351,6 +361,8 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, isRunningDemo: action.payload };
     case "SET_SCENARIO_GATE":
       return { ...state, scenarioIdx: action.payload.idx, awaitingScenarioStart: action.payload.awaiting };
+    case "SET_CURRENT_PARCEL":
+      return { ...state, currentParcelId: action.payload.parcelId };
     case "UPDATE_PARCELS":
       return { ...state, parcels: action.payload };
     case "SET_PENDING_FOLLOWUP":
@@ -407,21 +419,36 @@ function reducer(state: AppState, action: Action): AppState {
       }
       return state;
     }
-    case "APPLY_DELAY":
+    case "APPLY_DELAY": {
+      const target = state.parcels.find((p) => p.id === action.payload.parcelId);
+      if (!target) return state;
+      // Find Driver A parcels in route order; cascade the delay to every Driver A
+      // parcel at or after the target's index whose status isn't already delivered.
+      const aOrder = state.parcels.filter((p) => p.driver === target.driver).map((p) => p.id);
+      const targetIdx = aOrder.indexOf(target.id);
+      const cascadeIds = new Set(aOrder.slice(targetIdx));
       return {
         ...state,
         pendingFollowUp: null,
-        parcels: state.parcels.map((p) =>
-          p.id === action.payload.parcelId
-            ? {
-                ...p,
-                status: "delayed" as ParcelStatus,
-                eta: addMinutes(p.eta, action.payload.minutes),
-                delayReasons: [...(p.delayReasons ?? []), `+${action.payload.minutes}min · ${action.payload.reason}`],
-              }
-            : p
-        ),
+        parcels: state.parcels.map((p) => {
+          if (!cascadeIds.has(p.id)) return p;
+          if (p.status === "delivered") return p;
+          if (p.id === action.payload.parcelId) {
+            return {
+              ...p,
+              status: "delayed" as ParcelStatus,
+              eta: addMinutes(p.eta, action.payload.minutes),
+              delayReasons: [...(p.delayReasons ?? []), `+${action.payload.minutes}min · ${action.payload.reason}`],
+            };
+          }
+          return {
+            ...p,
+            eta: addMinutes(p.eta, action.payload.minutes),
+            delayReasons: [...(p.delayReasons ?? []), `+${action.payload.minutes}min · cascading from ${target.id}`],
+          };
+        }),
       };
+    }
     case "RESET_DEMO":
       return initialState;
     default:
@@ -759,9 +786,11 @@ export default function App() {
       state.driverAState === "Approaching" &&
       !scriptedDemoActiveRef.current
     ) {
-      const nextStop = stateRef.current.parcels.find(
-        (p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed")
-      );
+      const nextStop =
+        stateRef.current.parcels.find((p) => p.id === stateRef.current.currentParcelId) ??
+        stateRef.current.parcels.find(
+          (p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed")
+        );
       const where = nextStop ? `to ${nextStop.address}` : "your next stop";
       const question = `You're getting close ${where}. Want me to open the navigation app and show some parking hotspots nearby?`;
       dispatch({
@@ -781,9 +810,13 @@ export default function App() {
       state.driverAState === "Parked" &&
       !scriptedDemoActiveRef.current
     ) {
-      const target = stateRef.current.parcels.find(
-        (p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed")
-      );
+      const target =
+        stateRef.current.parcels.find(
+          (p) => p.id === stateRef.current.currentParcelId && (p.status === "pending" || p.status === "delayed")
+        ) ??
+        stateRef.current.parcels.find(
+          (p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed")
+        );
       if (target) {
         dispatch({ type: "COMPLETE_PARCEL", payload: { parcelId: target.id } });
         dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
@@ -984,15 +1017,20 @@ export default function App() {
   const runScenarioNavigation = async (runId: number) => {
     await wait(500);
     if (cancelled(runId)) return;
+    const cur =
+      stateRef.current.parcels.find((p) => p.id === stateRef.current.currentParcelId) ??
+      stateRef.current.parcels.find((p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed"));
+    const addr = cur?.address ?? "your next stop";
+    const id = cur?.id ?? "next";
     dispatch({ type: "SET_DRIVER_A_STATE", payload: "Approaching" });
-    dispatch({ type: "ADD_EVENT", payload: `Driver A approaching P001` });
+    dispatch({ type: "ADD_EVENT", payload: `Driver A approaching ${id}` });
 
     await wait(500);
     if (cancelled(runId)) return;
-    const q = `You're getting close to 12 Oak St. Want me to open the navigation app and show some parking hotspots nearby?`;
+    const q = `You're getting close to ${addr}. Want me to open the navigation app and show some parking hotspots nearby?`;
     dispatch({
       type: "SET_PENDING_FOLLOWUP",
-      payload: { type: "confirm_navigation", question: q, contextLabel: `P001 — 12 Oak St` },
+      payload: { type: "confirm_navigation", question: q, contextLabel: `${id} — ${addr}` },
     });
     dispatch({ type: "ADD_EVENT", payload: `StreetIQ → Driver A: approach prompt (awaiting yes/no)` });
     await playTtsAlert(q);
@@ -1016,7 +1054,8 @@ export default function App() {
     await wait(700);
     if (cancelled(runId)) return;
     const target =
-      stateRef.current.parcels.find((p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed"))
+      stateRef.current.parcels.find((p) => p.id === stateRef.current.currentParcelId)
+      ?? stateRef.current.parcels.find((p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed"))
       ?? stateRef.current.parcels.find((p) => p.driver === "Driver A");
     if (!target) return;
 
@@ -1462,7 +1501,9 @@ function PanelOne() {
     else processIntent("general", "");
   };
 
-  const aParcel = state.parcels.find((p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed"));
+  const aParcel =
+    state.parcels.find((p) => p.id === state.currentParcelId) ??
+    state.parcels.find((p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed"));
   const mode: "standby" | "listening" | "speaking" = state.isListening ? "listening" : state.isSpeaking ? "speaking" : "standby";
   const stateColor = state.driverAState === "Driving" ? SI.accent : state.driverAState === "Approaching" ? SI.amber : SI.accentDeep;
 
@@ -1932,7 +1973,7 @@ function PanelTwo() {
 // Panel 03 — Dispatch (parcels + system log)
 // ============================================================
 function PanelThree() {
-  const { state } = useDemo();
+  const { state, dispatch } = useDemo();
 
   const driverChip = (d: Parcel["driver"]) => {
     const isA = d === "Driver A";
@@ -1988,8 +2029,19 @@ function PanelThree() {
             {state.parcels.map((p) => {
               const dc = driverChip(p.driver);
               const sc = statusChip(p.status);
+              const isCurrent = p.id === state.currentParcelId;
+              const isSelectable = p.driver === "Driver A" && p.status !== "delivered";
               return (
-                <tr key={p.id} style={{ borderBottom: `1px solid ${SI.hairSoft}` }}>
+                <tr
+                  key={p.id}
+                  data-testid={`parcel-row-${p.id}`}
+                  onClick={isSelectable ? () => dispatch({ type: "SET_CURRENT_PARCEL", payload: { parcelId: p.id } }) : undefined}
+                  style={{
+                    borderBottom: `1px solid ${SI.hairSoft}`,
+                    cursor: isSelectable ? "pointer" : "default",
+                    background: isCurrent ? SI.accentWash : "transparent",
+                    boxShadow: isCurrent ? `inset 3px 0 0 ${SI.accentDeep}` : "none",
+                  }}>
                   <td style={{ padding: "8px", fontFamily: FONT_MONO, fontSize: 11, color: SI.inkSoft }}>{p.id}</td>
                   <td style={{ padding: "8px" }}>
                     <div style={{ fontFamily: FONT_HEAD, fontSize: 13, color: SI.ink, fontWeight: 500, lineHeight: 1.2 }}>{p.address}</div>
