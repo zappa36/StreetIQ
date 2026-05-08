@@ -799,7 +799,7 @@ export default function App() {
   };
 
   const processIntent = (intent: string, entity: string, extras: DelayExtras = {}) => {
-    console.log("[FLEETMIND] processIntent", { intent, entity, extras });
+    console.log("[StreetIQ] processIntent", { intent, entity, extras });
     dispatch({ type: "SET_INTENT", payload: { intent, entity } });
 
     if (intent === "road_closed") {
