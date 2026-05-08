@@ -587,20 +587,6 @@ function TopBar({
         ))}
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ fontFamily: FONT_MONO, fontSize: 10, color: SI.inkFaint, letterSpacing: "0.14em" }}>DRIVER B</span>
-        {(["Driving", "Approaching", "Parked"] as DriverState[]).map((s) => (
-          <button
-            key={s}
-            data-testid={`btn-sim-b-${s}`}
-            onClick={() => dispatch({ type: "SET_DRIVER_B_STATE", payload: s })}
-            style={segBtn(state.driverBState === s)}
-          >
-            {s.toUpperCase()}
-          </button>
-        ))}
-      </div>
-
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
         {state.isRunningDemo && (
           <span
@@ -1465,38 +1451,6 @@ function PanelOne() {
           )}
         </div>
 
-        {/* Quick-test transcript chips */}
-        <div style={{ marginTop: 4, display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", maxWidth: 360 }}>
-          {[
-            { label: "road closed on Maple", text: "the road is closed on Maple Street" },
-            { label: "no parking", text: "I can't find parking" },
-            { label: "customer not home", text: "the customer is not home" },
-            { label: "delivered", text: "delivered" },
-          ].map((c) => (
-            <button
-              key={c.label}
-              data-testid={`btn-chip-${c.label.replace(/\s+/g, "-")}`}
-              onClick={async () => {
-                dispatch({ type: "SET_TRANSCRIPT", payload: c.text });
-                await routeTranscript(c.text);
-              }}
-              style={{
-                fontFamily: FONT_MONO,
-                fontSize: 9,
-                color: SI.inkSoft,
-                background: SI.surfaceUp,
-                border: `1px solid ${SI.hair}`,
-                padding: "4px 8px",
-                borderRadius: 999,
-                cursor: "pointer",
-                letterSpacing: "0.06em",
-                fontWeight: 500,
-              }}
-            >
-              {c.label}
-            </button>
-          ))}
-        </div>
       </div>
     </div>
   );
@@ -2076,25 +2030,6 @@ function PanelFour() {
         </div>
       )}
 
-      {!showProactiveCard && !acceptedReroute && !pendingAlert && (
-        <div
-          data-testid="awaiting-intelligence"
-          style={{
-            marginTop: 12,
-            padding: "14px 16px",
-            border: `1px dashed ${SI.hair}`,
-            borderRadius: 10,
-            fontFamily: FONT_HEAD,
-            fontStyle: "italic",
-            fontSize: 12,
-            color: SI.inkFaint,
-            textAlign: "center",
-            letterSpacing: "0.04em",
-          }}
-        >
-          Awaiting intelligence
-        </div>
-      )}
 
       <div
         style={{
