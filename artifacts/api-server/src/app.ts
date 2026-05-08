@@ -3,8 +3,41 @@ import cors from "cors";
 import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { aiRateLimit } from "./middlewares/rateLimit";
+import { requireApiKey } from "./middlewares/apiKey";
 
 const app: Express = express();
+
+const isProduction = process.env.NODE_ENV === "production";
+
+const allowedOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(",").map((o) => o.trim())
+  : [];
+
+if (isProduction && allowedOrigins.length === 0) {
+  logger.warn("CORS_ORIGINS env var is not set — cross-origin requests will be blocked in production");
+}
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+      if (!isProduction && allowedOrigins.length === 0) {
+        callback(null, true);
+        return;
+      }
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    credentials: true,
+  }),
+);
 
 app.use(
   pinoHttp({
@@ -25,9 +58,11 @@ app.use(
     },
   }),
 );
-app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+app.use("/api/classify", aiRateLimit, requireApiKey);
+app.use("/api/tts", aiRateLimit, requireApiKey);
 
 app.use("/api", router);
 

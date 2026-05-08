@@ -68,7 +68,7 @@ router.post("/classify", async (req, res) => {
     return;
   }
 
-  logger.info({ tag: "classify.in", transcript, mode: mode ?? "intent" }, "↪ classify request");
+  logger.info({ tag: "classify.in", mode: mode ?? "intent", transcriptLen: transcript.length }, "↪ classify request");
 
   const anthropic = await getAnthropicClient();
 
@@ -104,7 +104,7 @@ router.post("/classify", async (req, res) => {
         reason: typeof parsed.reason === "string" && parsed.reason.length > 0 ? parsed.reason : "unspecified",
         confidence: parsed.confidence ?? 0.8,
       };
-      logger.info({ tag: "classify.out", mode: "delay_details", transcript, latencyMs: Date.now() - startedAt, ...out }, "↩ classify response");
+      logger.info({ tag: "classify.out", mode: "delay_details", latencyMs: Date.now() - startedAt, confidence: out.confidence }, "↩ classify response");
       res.json(out);
     } else {
       const intent = parsed.intent ?? "general";
@@ -118,11 +118,11 @@ router.post("/classify", async (req, res) => {
         if (Number.isFinite(parsed.minutes)) out.minutes = Math.max(1, Math.round(parsed.minutes));
         if (typeof parsed.reason === "string" && parsed.reason.length > 0) out.reason = parsed.reason;
       }
-      logger.info({ tag: "classify.out", mode: "intent", transcript, latencyMs: Date.now() - startedAt, ...out }, "↩ classify response");
+      logger.info({ tag: "classify.out", mode: "intent", latencyMs: Date.now() - startedAt, intent: out.intent, confidence: out.confidence }, "↩ classify response");
       res.json(out);
     }
   } catch (err) {
-    logger.error({ tag: "classify.err", transcript, mode, err: (err as Error).message }, "Classify error");
+    logger.error({ tag: "classify.err", mode, err: (err as Error).message }, "Classify error");
     if (mode === "delay_details") {
       res.status(500).json({ error: "Classification failed", minutes: 10, reason: "unspecified", confidence: 0 });
     } else {
