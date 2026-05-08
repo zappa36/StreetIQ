@@ -361,8 +361,24 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, isRunningDemo: action.payload };
     case "SET_SCENARIO_GATE":
       return { ...state, scenarioIdx: action.payload.idx, awaitingScenarioStart: action.payload.awaiting };
-    case "SET_CURRENT_PARCEL":
-      return { ...state, currentParcelId: action.payload.parcelId };
+    case "SET_CURRENT_PARCEL": {
+      const target = state.parcels.find((p) => p.id === action.payload.parcelId);
+      if (!target) return state;
+      const sameDriverIds = state.parcels.filter((p) => p.driver === target.driver).map((p) => p.id);
+      const targetIdx = sameDriverIds.indexOf(target.id);
+      const beforeIds = new Set(sameDriverIds.slice(0, targetIdx));
+      const afterIds = new Set(sameDriverIds.slice(targetIdx + 1));
+      return {
+        ...state,
+        currentParcelId: target.id,
+        parcels: state.parcels.map((p) => {
+          if (p.id === target.id) return { ...p, status: "pending" as ParcelStatus };
+          if (beforeIds.has(p.id)) return { ...p, status: "delivered" as ParcelStatus };
+          if (afterIds.has(p.id)) return { ...p, status: "pending" as ParcelStatus };
+          return p;
+        }),
+      };
+    }
     case "UPDATE_PARCELS":
       return { ...state, parcels: action.payload };
     case "SET_PENDING_FOLLOWUP":
