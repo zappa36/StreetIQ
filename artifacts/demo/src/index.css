@@ -150,7 +150,7 @@
   100% { transform: scaleY(1); }
 }
 
-@keyframes si-live-pulse {
+@keyframes si-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
 }

@@ -609,7 +609,7 @@ function TopBar({
               fontSize: 10,
               color: SI.amberDeep,
               letterSpacing: "0.14em",
-              animation: "si-live-pulse 1.6s ease-in-out infinite",
+              animation: "si-pulse 1.6s ease-in-out infinite",
             }}
           >
 ● DEMO RUNNING
@@ -1848,7 +1848,7 @@ function PanelThree() {
                 height: 6,
                 borderRadius: "50%",
                 background: SI.accent,
-                animation: "si-live-pulse 1.6s ease-in-out infinite",
+                animation: "si-pulse 1.6s ease-in-out infinite",
               }}
             />
             <span style={{ fontFamily: FONT_MONO, fontSize: 9, color: SI.accentDeep, letterSpacing: "0.18em", fontWeight: 700 }}>LIVE</span>
