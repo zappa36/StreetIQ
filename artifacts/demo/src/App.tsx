@@ -691,9 +691,15 @@ export default function App() {
   useEffect(() => () => clearDemoTimers(), []);
 
   // Proactive announcement when Driver A transitions into "Approaching".
+  // Suppressed during the scripted demo (the demo controls the prompt directly).
   const prevDriverAStateRef = useRef(state.driverAState);
+  const scriptedDemoActiveRef = useRef(false);
   useEffect(() => {
-    if (prevDriverAStateRef.current !== "Approaching" && state.driverAState === "Approaching") {
+    if (
+      prevDriverAStateRef.current !== "Approaching" &&
+      state.driverAState === "Approaching" &&
+      !scriptedDemoActiveRef.current
+    ) {
       const nextStop = stateRef.current.parcels.find(
         (p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed")
       );
@@ -713,7 +719,7 @@ export default function App() {
     prevDriverAStateRef.current = state.driverAState;
   }, [state.driverAState]);
 
-  const playTtsAlert = async (text: string) => {
+  const playTtsAlert = async (text: string): Promise<void> => {
     const markStart = () => {
       dispatch({ type: "SET_SPOKEN_CAPTION", payload: text });
       dispatch({ type: "SET_SPEAKING", payload: true });
@@ -730,21 +736,32 @@ export default function App() {
         const url = URL.createObjectURL(blob);
         const audio = new Audio(url);
         markStart();
-        audio.onended = markEnd;
-        audio.onerror = markEnd;
-        audio.play().catch(markEnd);
-        return;
+        return await new Promise<void>((resolve) => {
+          const done = () => {
+            markEnd();
+            resolve();
+          };
+          audio.onended = done;
+          audio.onerror = done;
+          audio.play().catch(done);
+        });
       }
     } catch {
       /* fall through */
     }
     if ("speechSynthesis" in window) {
-      const utt = new SpeechSynthesisUtterance(text);
-      utt.rate = 1;
-      utt.onstart = markStart;
-      utt.onend = markEnd;
-      utt.onerror = markEnd;
-      window.speechSynthesis.speak(utt);
+      return await new Promise<void>((resolve) => {
+        const utt = new SpeechSynthesisUtterance(text);
+        utt.rate = 1;
+        utt.onstart = markStart;
+        const done = () => {
+          markEnd();
+          resolve();
+        };
+        utt.onend = done;
+        utt.onerror = done;
+        window.speechSynthesis.speak(utt);
+      });
     }
   };
 
@@ -860,34 +877,94 @@ export default function App() {
     playTtsAlert(`You have a new notification from Driver B. Would you like to hear it?`);
   };
 
-  const handleRunDemo = () => {
+  const demoCancelledRef = useRef(false);
+
+  const wait = (ms: number) =>
+    new Promise<void>((resolve) => {
+      const t = setTimeout(resolve, ms);
+      demoTimers.current.push(t);
+    });
+
+  const handleRunDemo = async () => {
     clearDemoTimers();
+    demoCancelledRef.current = false;
+    scriptedDemoActiveRef.current = true;
     dispatch({ type: "RESET_DEMO" });
     dispatch({ type: "SET_RUNNING_DEMO", payload: true });
-    demoTimers.current.push(
-      setTimeout(() => {
-        dispatch({ type: "SET_DRIVER_A_STATE", payload: "Approaching" });
-        dispatch({ type: "ADD_EVENT", payload: `Driver A approaching P001` });
-      }, 500),
-      setTimeout(() => {
-        dispatch({ type: "SET_TRANSCRIPT", payload: "road is closed on Maple Street" });
-        dispatch({ type: "SET_INTENT", payload: { intent: "road_closed", entity: "Maple Street" } });
-        dispatch({ type: "ADD_EVENT", payload: `Driver A: road_closed "Maple Street"` });
-        dispatch({ type: "ADD_EVENT", payload: `REROUTE ALERT: Generating alternate routes...` });
-        dispatch({ type: "ROAD_CLOSED_IMPACT" });
-      }, 2000),
-      setTimeout(() => {
-        dispatch({ type: "SET_B_ALERT_VISIBLE", payload: true });
-        playTtsAlert("A colleague just reported Maple Street is closed. Want me to show an alternate route?");
-      }, 4500),
-      setTimeout(() => {
-        dispatch({ type: "ADD_EVENT", payload: `Driver B accepted reroute for P004` });
-        dispatch({ type: "DRIVER_B_ACCEPT_REROUTE" });
-      }, 8000),
-    );
+
+    const cancelled = () => demoCancelledRef.current;
+
+    try {
+      // Beat 1 — Driver A approaches P001
+      await wait(700);
+      if (cancelled()) return;
+      dispatch({ type: "SET_DRIVER_A_STATE", payload: "Approaching" });
+      dispatch({ type: "ADD_EVENT", payload: `Driver A approaching P001` });
+
+      // Beat 2 — StreetIQ proactive approach prompt (awaitable TTS)
+      await wait(500);
+      if (cancelled()) return;
+      const approachQuestion = `You're getting close to 12 Oak St. Want me to open the navigation app and show some parking hotspots nearby?`;
+      dispatch({
+        type: "SET_PENDING_FOLLOWUP",
+        payload: {
+          type: "confirm_navigation",
+          question: approachQuestion,
+          contextLabel: `P001 — 12 Oak St`,
+        },
+      });
+      dispatch({ type: "ADD_EVENT", payload: `StreetIQ → Driver A: approach prompt (awaiting yes/no)` });
+      await playTtsAlert(approachQuestion);
+      if (cancelled()) return;
+
+      // Beat 3 — Driver A confirms; map opens
+      await wait(900);
+      if (cancelled()) return;
+      dispatch({ type: "SET_INTENT", payload: { intent: "confirm_yes", entity: "" } });
+      dispatch({ type: "SET_MAP_OPENING", payload: true });
+      dispatch({ type: "ADD_EVENT", payload: `Driver A: confirmed → opening navigation…` });
+      const openingMsg = "Opening the map and pulling up parking hotspots near you.";
+      const openingTts = playTtsAlert(openingMsg);
+      await wait(1600);
+      if (cancelled()) return;
+      dispatch({ type: "SET_MAP_VISIBLE", payload: true });
+      dispatch({ type: "ADD_EVENT", payload: `Map opened — parking hotspots loaded` });
+      dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
+      await openingTts;
+      if (cancelled()) return;
+
+      // Beat 4 — Driver A reports road closure
+      await wait(1200);
+      if (cancelled()) return;
+      dispatch({ type: "SET_TRANSCRIPT", payload: "road is closed on Maple Street" });
+      dispatch({ type: "SET_INTENT", payload: { intent: "road_closed", entity: "Maple Street" } });
+      dispatch({ type: "ADD_EVENT", payload: `Driver A: road_closed "Maple Street"` });
+      dispatch({ type: "ADD_EVENT", payload: `REROUTE ALERT: Generating alternate routes...` });
+      dispatch({ type: "ROAD_CLOSED_IMPACT" });
+
+      // Beat 5 — StreetIQ relays the closure to Driver B (and asks)
+      await wait(1400);
+      if (cancelled()) return;
+      dispatch({ type: "SET_B_ALERT_VISIBLE", payload: true });
+      await playTtsAlert("A colleague just reported Maple Street is closed. Want me to show an alternate route?");
+      if (cancelled()) return;
+
+      // Beat 6 — Driver B accepts the reroute
+      await wait(1200);
+      if (cancelled()) return;
+      dispatch({ type: "ADD_EVENT", payload: `Driver B accepted reroute for P004` });
+      dispatch({ type: "DRIVER_B_ACCEPT_REROUTE" });
+    } finally {
+      scriptedDemoActiveRef.current = false;
+      if (!demoCancelledRef.current) {
+        dispatch({ type: "SET_RUNNING_DEMO", payload: false });
+      }
+    }
   };
 
   const handleReset = () => {
+    demoCancelledRef.current = true;
+    scriptedDemoActiveRef.current = false;
     clearDemoTimers();
     dispatch({ type: "RESET_DEMO" });
   };
