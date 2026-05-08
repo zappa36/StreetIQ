@@ -1208,7 +1208,7 @@ export default function App() {
           <PanelShell index="02" title="Dispatch" sub="6 stops · 2 drivers" tone="rust" bg={SI.bg}>
             <PanelThree />
           </PanelShell>
-          <PanelShell index="03" title="Proactive Copilot" sub="Driver B → A" tone="ink2" bg={SI.bgDeep}>
+          <PanelShell index="03" title="Driver B Quick Actions" sub="Driver B → A" tone="ink2" bg={SI.bgDeep}>
             <PanelFour />
           </PanelShell>
         </div>
