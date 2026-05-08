@@ -107,6 +107,7 @@ type Action =
   | { type: "PARKING_ISSUE_IMPACT" }
   | { type: "CUSTOMER_NOT_HOME_IMPACT" }
   | { type: "DELIVERY_COMPLETE_IMPACT" }
+  | { type: "COMPLETE_PARCEL"; payload: { parcelId: string } }
   | { type: "DRIVER_B_ACCEPT_REROUTE" }
   | { type: "SET_B_ALERT_VISIBLE"; payload: boolean }
   | { type: "SET_B_REROUTE_ACCEPTED"; payload: boolean }
@@ -308,6 +309,13 @@ function reducer(state: AppState, action: Action): AppState {
         driverAState: "Driving",
         parcels: state.parcels.map((p) =>
           p.id === "P001" ? { ...p, status: "delivered" as ParcelStatus } : p
+        ),
+      };
+    case "COMPLETE_PARCEL":
+      return {
+        ...state,
+        parcels: state.parcels.map((p) =>
+          p.id === action.payload.parcelId ? { ...p, status: "delivered" as ParcelStatus } : p
         ),
       };
     case "DRIVER_B_ACCEPT_REROUTE":
@@ -766,6 +774,26 @@ export default function App() {
       });
       dispatch({ type: "ADD_EVENT", payload: `StreetIQ → Driver A: approach prompt (awaiting yes/no)` });
       playTtsAlert(question);
+    }
+    // Driver A just parked → mark next open delivery complete and announce arrival.
+    if (
+      prevDriverAStateRef.current !== "Parked" &&
+      state.driverAState === "Parked" &&
+      !scriptedDemoActiveRef.current
+    ) {
+      const target = stateRef.current.parcels.find(
+        (p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed")
+      );
+      if (target) {
+        dispatch({ type: "COMPLETE_PARCEL", payload: { parcelId: target.id } });
+        dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
+        dispatch({ type: "SET_MAP_VISIBLE", payload: false });
+        dispatch({ type: "ADD_EVENT", payload: `Driver A parked → ${target.id} marked delivered` });
+        playTtsAlert(`You've arrived at ${target.address}. I've marked ${target.id} as delivered. Nice work.`);
+      } else {
+        dispatch({ type: "ADD_EVENT", payload: `Driver A parked` });
+        playTtsAlert(`You've arrived. All deliveries are complete — nice work.`);
+      }
     }
     prevDriverAStateRef.current = state.driverAState;
   }, [state.driverAState]);
