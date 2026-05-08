@@ -886,6 +886,8 @@ export default function App() {
     const isAtStop = stateRef.current.driverAState === "Parked" || stateRef.current.driverAState === "Approaching";
     const cleaned = (ref ?? "").toLowerCase().trim();
     if (!cleaned || /\b(next|upcoming|following)\b/.test(cleaned)) {
+      const current = aOpen.find((p) => p.id === stateRef.current.currentParcelId);
+      if (current) return current;
       if (aOpen.length === 0) return null;
       return isAtStop ? (aOpen[1] ?? aOpen[0]) : aOpen[0];
     }
