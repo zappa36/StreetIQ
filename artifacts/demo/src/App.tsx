@@ -90,6 +90,8 @@ interface AppState {
   isSpeaking: boolean;
   spokenCaption: string;
   isRunningDemo: boolean;
+  scenarioIdx: number;
+  awaitingScenarioStart: boolean;
   pendingFollowUp: PendingFollowUp | null;
 }
 
@@ -115,6 +117,7 @@ type Action =
   | { type: "SET_SPEAKING"; payload: boolean }
   | { type: "SET_SPOKEN_CAPTION"; payload: string }
   | { type: "SET_RUNNING_DEMO"; payload: boolean }
+  | { type: "SET_SCENARIO_GATE"; payload: { idx: number; awaiting: boolean } }
   | { type: "UPDATE_PARCELS"; payload: Parcel[] }
   | { type: "SET_PENDING_FOLLOWUP"; payload: PendingFollowUp }
   | { type: "CLEAR_PENDING_FOLLOWUP" }
@@ -164,8 +167,31 @@ const initialState: AppState = {
   isSpeaking: false,
   spokenCaption: "",
   isRunningDemo: false,
+  scenarioIdx: -1,
+  awaitingScenarioStart: false,
   pendingFollowUp: null,
 };
+
+const SCENARIOS: { id: string; title: string; description: string }[] = [
+  {
+    id: "navigation",
+    title: "Scenario 1 — Proactive Navigation",
+    description:
+      "Driver A is approaching their first stop. StreetIQ proactively offers to open the map and surface parking hotspots nearby.",
+  },
+  {
+    id: "delay",
+    title: "Scenario 2 — Voice-Reported Delay",
+    description:
+      "Driver A tells Otto there's heavy traffic and they'll be ten minutes late to the next delivery. StreetIQ updates the ETA and notifies dispatch.",
+  },
+  {
+    id: "reroute",
+    title: "Scenario 3 — Crowdsourced Road Closure",
+    description:
+      "Driver A reports Maple Street is closed. StreetIQ relays the closure to Driver B and offers them an alternate route.",
+  },
+];
 
 // --- Driver B → Driver A scenarios (Panel 4 buttons) ---
 const DRIVER_B_SCENARIOS: Record<DriverBScenarioId, {
@@ -315,6 +341,8 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, spokenCaption: action.payload };
     case "SET_RUNNING_DEMO":
       return { ...state, isRunningDemo: action.payload };
+    case "SET_SCENARIO_GATE":
+      return { ...state, scenarioIdx: action.payload.idx, awaitingScenarioStart: action.payload.awaiting };
     case "UPDATE_PARCELS":
       return { ...state, parcels: action.payload };
     case "SET_PENDING_FOLLOWUP":
@@ -885,81 +913,124 @@ export default function App() {
       demoTimers.current.push(t);
     });
 
-  const handleRunDemo = async () => {
+  const cancelled = () => demoCancelledRef.current;
+
+  // --- Scenario beats ---
+  const runScenarioNavigation = async () => {
+    await wait(500);
+    if (cancelled()) return;
+    dispatch({ type: "SET_DRIVER_A_STATE", payload: "Approaching" });
+    dispatch({ type: "ADD_EVENT", payload: `Driver A approaching P001` });
+
+    await wait(500);
+    if (cancelled()) return;
+    const q = `You're getting close to 12 Oak St. Want me to open the navigation app and show some parking hotspots nearby?`;
+    dispatch({
+      type: "SET_PENDING_FOLLOWUP",
+      payload: { type: "confirm_navigation", question: q, contextLabel: `P001 — 12 Oak St` },
+    });
+    dispatch({ type: "ADD_EVENT", payload: `StreetIQ → Driver A: approach prompt (awaiting yes/no)` });
+    await playTtsAlert(q);
+    if (cancelled()) return;
+
+    await wait(900);
+    if (cancelled()) return;
+    dispatch({ type: "SET_INTENT", payload: { intent: "confirm_yes", entity: "" } });
+    dispatch({ type: "SET_MAP_OPENING", payload: true });
+    dispatch({ type: "ADD_EVENT", payload: `Driver A: confirmed → opening navigation…` });
+    const openTts = playTtsAlert("Opening the map and pulling up parking hotspots near you.");
+    await wait(1600);
+    if (cancelled()) return;
+    dispatch({ type: "SET_MAP_VISIBLE", payload: true });
+    dispatch({ type: "ADD_EVENT", payload: `Map opened — parking hotspots loaded` });
+    dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
+    await openTts;
+  };
+
+  const runScenarioDelay = async () => {
+    await wait(700);
+    if (cancelled()) return;
+    const target =
+      stateRef.current.parcels.find((p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed"))
+      ?? stateRef.current.parcels.find((p) => p.driver === "Driver A");
+    if (!target) return;
+
+    // Driver A speaks
+    dispatch({ type: "SET_TRANSCRIPT", payload: "There's heavy traffic — I'll be about ten minutes late to my next delivery." });
+    dispatch({ type: "SET_INTENT", payload: { intent: "delay_reported", entity: `${target.id} +10min · heavy traffic` } });
+    dispatch({ type: "ADD_EVENT", payload: `Driver A: delay_reported for ${target.id} (heavy traffic, +10min)` });
+    dispatch({ type: "APPLY_DELAY", payload: { parcelId: target.id, minutes: 10, reason: "heavy traffic" } });
+
+    await wait(900);
+    if (cancelled()) return;
+    await playTtsAlert(
+      `Got it — I've pushed your ETA for ${target.id} back ten minutes for heavy traffic and let dispatch know.`
+    );
+  };
+
+  const runScenarioReroute = async () => {
+    await wait(600);
+    if (cancelled()) return;
+    dispatch({ type: "SET_TRANSCRIPT", payload: "the road is closed on Maple Street" });
+    dispatch({ type: "SET_INTENT", payload: { intent: "road_closed", entity: "Maple Street" } });
+    dispatch({ type: "ADD_EVENT", payload: `Driver A: road_closed "Maple Street"` });
+    dispatch({ type: "ADD_EVENT", payload: `REROUTE ALERT: Generating alternate routes...` });
+    dispatch({ type: "ROAD_CLOSED_IMPACT" });
+
+    await wait(1400);
+    if (cancelled()) return;
+    dispatch({ type: "SET_B_ALERT_VISIBLE", payload: true });
+    await playTtsAlert("Driver B — a colleague just reported Maple Street is closed. Want me to show an alternate route?");
+    if (cancelled()) return;
+
+    await wait(1200);
+    if (cancelled()) return;
+    dispatch({ type: "ADD_EVENT", payload: `Driver B accepted reroute for P004` });
+    dispatch({ type: "DRIVER_B_ACCEPT_REROUTE" });
+  };
+
+  const SCENARIO_RUNNERS: Array<() => Promise<void>> = [
+    runScenarioNavigation,
+    runScenarioDelay,
+    runScenarioReroute,
+  ];
+
+  const queueScenario = (idx: number) => {
+    if (idx >= SCENARIOS.length) {
+      scriptedDemoActiveRef.current = false;
+      dispatch({ type: "SET_RUNNING_DEMO", payload: false });
+      dispatch({ type: "SET_SCENARIO_GATE", payload: { idx: -1, awaiting: false } });
+      return;
+    }
+    dispatch({ type: "SET_SCENARIO_GATE", payload: { idx, awaiting: true } });
+  };
+
+  const handleRunDemo = () => {
     clearDemoTimers();
     demoCancelledRef.current = false;
     scriptedDemoActiveRef.current = true;
     dispatch({ type: "RESET_DEMO" });
     dispatch({ type: "SET_RUNNING_DEMO", payload: true });
+    queueScenario(0);
+  };
 
-    const cancelled = () => demoCancelledRef.current;
-
+  const handleStartScenario = async () => {
+    const idx = stateRef.current.scenarioIdx;
+    if (idx < 0 || idx >= SCENARIO_RUNNERS.length) return;
+    dispatch({ type: "SET_SCENARIO_GATE", payload: { idx, awaiting: false } });
     try {
-      // Beat 1 — Driver A approaches P001
-      await wait(700);
-      if (cancelled()) return;
-      dispatch({ type: "SET_DRIVER_A_STATE", payload: "Approaching" });
-      dispatch({ type: "ADD_EVENT", payload: `Driver A approaching P001` });
-
-      // Beat 2 — StreetIQ proactive approach prompt (awaitable TTS)
-      await wait(500);
-      if (cancelled()) return;
-      const approachQuestion = `You're getting close to 12 Oak St. Want me to open the navigation app and show some parking hotspots nearby?`;
-      dispatch({
-        type: "SET_PENDING_FOLLOWUP",
-        payload: {
-          type: "confirm_navigation",
-          question: approachQuestion,
-          contextLabel: `P001 — 12 Oak St`,
-        },
-      });
-      dispatch({ type: "ADD_EVENT", payload: `StreetIQ → Driver A: approach prompt (awaiting yes/no)` });
-      await playTtsAlert(approachQuestion);
-      if (cancelled()) return;
-
-      // Beat 3 — Driver A confirms; map opens
-      await wait(900);
-      if (cancelled()) return;
-      dispatch({ type: "SET_INTENT", payload: { intent: "confirm_yes", entity: "" } });
-      dispatch({ type: "SET_MAP_OPENING", payload: true });
-      dispatch({ type: "ADD_EVENT", payload: `Driver A: confirmed → opening navigation…` });
-      const openingMsg = "Opening the map and pulling up parking hotspots near you.";
-      const openingTts = playTtsAlert(openingMsg);
-      await wait(1600);
-      if (cancelled()) return;
-      dispatch({ type: "SET_MAP_VISIBLE", payload: true });
-      dispatch({ type: "ADD_EVENT", payload: `Map opened — parking hotspots loaded` });
-      dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
-      await openingTts;
-      if (cancelled()) return;
-
-      // Beat 4 — Driver A reports road closure
-      await wait(1200);
-      if (cancelled()) return;
-      dispatch({ type: "SET_TRANSCRIPT", payload: "road is closed on Maple Street" });
-      dispatch({ type: "SET_INTENT", payload: { intent: "road_closed", entity: "Maple Street" } });
-      dispatch({ type: "ADD_EVENT", payload: `Driver A: road_closed "Maple Street"` });
-      dispatch({ type: "ADD_EVENT", payload: `REROUTE ALERT: Generating alternate routes...` });
-      dispatch({ type: "ROAD_CLOSED_IMPACT" });
-
-      // Beat 5 — StreetIQ relays the closure to Driver B (and asks)
-      await wait(1400);
-      if (cancelled()) return;
-      dispatch({ type: "SET_B_ALERT_VISIBLE", payload: true });
-      await playTtsAlert("A colleague just reported Maple Street is closed. Want me to show an alternate route?");
-      if (cancelled()) return;
-
-      // Beat 6 — Driver B accepts the reroute
-      await wait(1200);
-      if (cancelled()) return;
-      dispatch({ type: "ADD_EVENT", payload: `Driver B accepted reroute for P004` });
-      dispatch({ type: "DRIVER_B_ACCEPT_REROUTE" });
+      await SCENARIO_RUNNERS[idx]();
     } finally {
-      scriptedDemoActiveRef.current = false;
       if (!demoCancelledRef.current) {
-        dispatch({ type: "SET_RUNNING_DEMO", payload: false });
+        await wait(600);
+        queueScenario(idx + 1);
       }
     }
+  };
+
+  const handleSkipScenario = () => {
+    const idx = stateRef.current.scenarioIdx;
+    queueScenario(idx + 1);
   };
 
   const handleReset = () => {
@@ -984,6 +1055,90 @@ export default function App() {
         }}
       >
         <TopBar state={state} dispatch={dispatch} onRunDemo={handleRunDemo} onReset={handleReset} />
+
+        {state.awaitingScenarioStart && state.scenarioIdx >= 0 && state.scenarioIdx < SCENARIOS.length && (
+          <div
+            data-testid="scenario-modal"
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(10, 22, 40, 0.55)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 1000,
+              backdropFilter: "blur(2px)",
+            }}
+          >
+            <div
+              style={{
+                background: SI.surface,
+                border: `1px solid ${SI.hair}`,
+                borderLeft: `4px solid ${SI.accentDeep}`,
+                borderRadius: 12,
+                padding: "22px 26px",
+                width: "min(460px, 92vw)",
+                boxShadow: "0 24px 60px rgba(0,0,0,0.18)",
+              }}
+            >
+              <div
+                style={{
+                  fontFamily: FONT_MONO,
+                  fontSize: 10,
+                  color: SI.accentDeep,
+                  letterSpacing: "0.18em",
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                  marginBottom: 6,
+                }}
+              >
+                Scripted Demo · {state.scenarioIdx + 1} of {SCENARIOS.length}
+              </div>
+              <div style={{ fontFamily: FONT_HEAD, fontSize: 20, color: SI.ink, fontWeight: 600, lineHeight: 1.25 }}>
+                {SCENARIOS[state.scenarioIdx].title}
+              </div>
+              <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: SI.inkSoft, marginTop: 10, lineHeight: 1.5 }}>
+                {SCENARIOS[state.scenarioIdx].description}
+              </div>
+              <div style={{ marginTop: 18, display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button
+                  data-testid="btn-scenario-skip"
+                  onClick={handleSkipScenario}
+                  style={{
+                    fontFamily: FONT_BODY,
+                    fontSize: 12,
+                    fontWeight: 500,
+                    color: SI.inkSoft,
+                    background: "transparent",
+                    border: `1px solid ${SI.hair}`,
+                    padding: "8px 14px",
+                    borderRadius: 6,
+                    cursor: "pointer",
+                  }}
+                >
+                  Skip
+                </button>
+                <button
+                  data-testid="btn-scenario-start"
+                  onClick={handleStartScenario}
+                  style={{
+                    fontFamily: FONT_BODY,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: "#fff",
+                    background: SI.accentDeep,
+                    border: `1px solid ${SI.accentDeep}`,
+                    padding: "8px 18px",
+                    borderRadius: 6,
+                    cursor: "pointer",
+                  }}
+                >
+                  ▶ Start
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* 1×4 panel row — falls back to horizontal scroll under 1280px */}
         <div className="si-panel-row" style={{ flex: 1, display: "flex", minHeight: 0, minWidth: 0, overflowX: "auto" }}>
