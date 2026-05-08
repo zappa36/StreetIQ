@@ -509,17 +509,19 @@ function PanelShell({
         }}
       >
         <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: accent }} />
-        <span
-          style={{
-            fontFamily: FONT_MONO,
-            fontSize: 11,
-            color: accent,
-            letterSpacing: "0.18em",
-            fontWeight: 600,
-          }}
-        >
-          PANEL {index}
-        </span>
+        {index && (
+          <span
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 11,
+              color: accent,
+              letterSpacing: "0.18em",
+              fontWeight: 600,
+            }}
+          >
+            PANEL {index}
+          </span>
+        )}
         <span
           style={{
             fontFamily: FONT_HEAD,
@@ -1198,13 +1200,15 @@ export default function App() {
           <PanelShell index="01" title="Voice Cockpit" sub="Driver A" tone="accent" bg={SI.bg}>
             <PanelOne />
           </PanelShell>
-          <PanelShell index="02" title="Adaptive Map" sub="shared layer" tone="amber" bg={SI.bgDeep}>
-            <PanelTwo />
-          </PanelShell>
-          <PanelShell index="03" title="Dispatch" sub="6 stops · 2 drivers" tone="rust" bg={SI.bg}>
+          {(state.mapVisible || state.mapOpening) && (
+            <PanelShell index="" title="Map" sub="shared layer" tone="amber" bg={SI.bgDeep}>
+              <PanelTwo />
+            </PanelShell>
+          )}
+          <PanelShell index="02" title="Dispatch" sub="6 stops · 2 drivers" tone="rust" bg={SI.bg}>
             <PanelThree />
           </PanelShell>
-          <PanelShell index="04" title="Proactive Copilot" sub="Driver B → A" tone="ink2" bg={SI.bgDeep}>
+          <PanelShell index="03" title="Proactive Copilot" sub="Driver B → A" tone="ink2" bg={SI.bgDeep}>
             <PanelFour />
           </PanelShell>
         </div>
