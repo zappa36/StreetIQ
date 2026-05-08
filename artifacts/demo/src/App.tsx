@@ -1372,7 +1372,7 @@ function PanelOne() {
       )}
 
       {/* mic + waveform */}
-      <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
+      <div style={{ marginTop: "auto", paddingTop: 28, display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
         <SIWave mode={mode} />
         <button
           data-testid="btn-mic"
