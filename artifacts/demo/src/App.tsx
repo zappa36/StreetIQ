@@ -789,7 +789,9 @@ export default function App() {
         dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
         dispatch({ type: "SET_MAP_VISIBLE", payload: false });
         dispatch({ type: "ADD_EVENT", payload: `Driver A parked → ${target.id} marked delivered` });
-        playTtsAlert(`You've arrived at ${target.address}. I've marked ${target.id} as delivered. Nice work.`);
+        playTtsAlert(
+          `You've arrived at ${target.address}. I've marked ${target.id} as delivered. I'll also record this parking location to help build our parking hotspots. Nice work.`
+        );
       } else {
         dispatch({ type: "ADD_EVENT", payload: `Driver A parked` });
         playTtsAlert(`You've arrived. All deliveries are complete — nice work.`);
