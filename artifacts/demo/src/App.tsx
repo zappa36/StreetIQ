@@ -88,6 +88,7 @@ interface AppState {
   lastEntity: string;
   isListening: boolean;
   isSpeaking: boolean;
+  spokenCaption: string;
   isRunningDemo: boolean;
   pendingFollowUp: PendingFollowUp | null;
 }
@@ -112,6 +113,7 @@ type Action =
   | { type: "SET_INTENT"; payload: { intent: string; entity: string } }
   | { type: "SET_LISTENING"; payload: boolean }
   | { type: "SET_SPEAKING"; payload: boolean }
+  | { type: "SET_SPOKEN_CAPTION"; payload: string }
   | { type: "SET_RUNNING_DEMO"; payload: boolean }
   | { type: "UPDATE_PARCELS"; payload: Parcel[] }
   | { type: "SET_PENDING_FOLLOWUP"; payload: PendingFollowUp }
@@ -160,6 +162,7 @@ const initialState: AppState = {
   lastEntity: "",
   isListening: false,
   isSpeaking: false,
+  spokenCaption: "",
   isRunningDemo: false,
   pendingFollowUp: null,
 };
@@ -307,7 +310,9 @@ function reducer(state: AppState, action: Action): AppState {
     case "SET_LISTENING":
       return { ...state, isListening: action.payload };
     case "SET_SPEAKING":
-      return { ...state, isSpeaking: action.payload };
+      return { ...state, isSpeaking: action.payload, ...(action.payload ? {} : { spokenCaption: "" }) };
+    case "SET_SPOKEN_CAPTION":
+      return { ...state, spokenCaption: action.payload };
     case "SET_RUNNING_DEMO":
       return { ...state, isRunningDemo: action.payload };
     case "UPDATE_PARCELS":
@@ -709,7 +714,10 @@ export default function App() {
   }, [state.driverAState]);
 
   const playTtsAlert = async (text: string) => {
-    const markStart = () => dispatch({ type: "SET_SPEAKING", payload: true });
+    const markStart = () => {
+      dispatch({ type: "SET_SPOKEN_CAPTION", payload: text });
+      dispatch({ type: "SET_SPEAKING", payload: true });
+    };
     const markEnd = () => dispatch({ type: "SET_SPEAKING", payload: false });
     try {
       const ttsRes = await fetch("/api/tts", {
@@ -1388,7 +1396,20 @@ function PanelOne() {
           {mode === "listening" ? "● rec" : mode === "speaking" ? "otto" : "speak"}
         </button>
         <div style={{ minHeight: 56, textAlign: "center", maxWidth: 320 }}>
-          {state.transcript ? (
+          {mode === "speaking" && state.spokenCaption ? (
+            <div
+              data-testid="spoken-caption"
+              style={{
+                fontFamily: FONT_HEAD,
+                fontStyle: "italic",
+                fontSize: 14,
+                color: SI.accentDeep,
+                lineHeight: 1.4,
+              }}
+            >
+              “{state.spokenCaption}”
+            </div>
+          ) : state.transcript ? (
             <>
               <div
                 style={{
