@@ -900,20 +900,14 @@ export default function App() {
       >
         <TopBar state={state} dispatch={dispatch} onRunDemo={handleRunDemo} onReset={handleReset} />
 
-        {/* 3-column layout: [P01 over P02] | P03 | P04 */}
+        {/* 1×4 panel row — falls back to horizontal scroll under 1280px */}
         <div className="si-panel-row" style={{ flex: 1, display: "flex", minHeight: 0, minWidth: 0, overflowX: "auto" }}>
-          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
-            <div style={{ flex: 1, minHeight: 0, display: "flex", borderBottom: `1px solid ${SI.hair}` }}>
-              <PanelShell index="01" title="Voice Cockpit" sub="Driver A" tone="accent" bg={SI.bg}>
-                <PanelOne />
-              </PanelShell>
-            </div>
-            <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
-              <PanelShell index="02" title="Adaptive Map" sub="shared layer" tone="amber" bg={SI.bgDeep}>
-                <PanelTwo />
-              </PanelShell>
-            </div>
-          </div>
+          <PanelShell index="01" title="Voice Cockpit" sub="Driver A" tone="accent" bg={SI.bg}>
+            <PanelOne />
+          </PanelShell>
+          <PanelShell index="02" title="Adaptive Map" sub="shared layer" tone="amber" bg={SI.bgDeep}>
+            <PanelTwo />
+          </PanelShell>
           <PanelShell index="03" title="Dispatch" sub="6 stops · 2 drivers" tone="rust" bg={SI.bg}>
             <PanelThree />
           </PanelShell>
