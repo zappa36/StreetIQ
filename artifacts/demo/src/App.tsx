@@ -1228,42 +1228,10 @@ function PanelOne() {
           initial={{ opacity: 0, y: -8 }}
           animate={{ opacity: 1, y: 0 }}
           data-testid="followup-prompt"
-          style={{
-            marginTop: 16,
-            padding: "14px 16px",
-            background: SI.surfaceUp,
-            borderLeft: `4px solid ${SI.amberDeep}`,
-            border: `1px solid ${SI.hair}`,
-            borderRadius: 10,
-          }}
+          style={{ marginTop: 16 }}
         >
-          <div
-            style={{
-              fontFamily: FONT_MONO,
-              fontSize: 10,
-              color: SI.amberDeep,
-              letterSpacing: "0.18em",
-              textTransform: "uppercase",
-              fontWeight: 700,
-              marginBottom: 4,
-            }}
-          >
-            StreetIQ asks
-          </div>
-          <div style={{ fontFamily: FONT_HEAD, fontSize: 14, fontStyle: "italic", color: SI.ink, lineHeight: 1.4 }}>
-            {state.pendingFollowUp.question}
-          </div>
-          <div style={{ fontFamily: FONT_MONO, fontSize: 10, color: SI.inkFaint, marginTop: 6, letterSpacing: "0.06em" }}>
-            re:{" "}
-            {state.pendingFollowUp.type === "delay_details"
-              ? state.pendingFollowUp.parcelLabel
-              : state.pendingFollowUp.type === "confirm_navigation"
-                ? state.pendingFollowUp.contextLabel
-                : `Driver B → ${state.pendingFollowUp.summary}`}
-          </div>
-
           {state.pendingFollowUp.type === "inbound_alert" ? (
-            <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+            <div style={{ display: "flex", gap: 8 }}>
               <button
                 onClick={() => acceptInboundAlert(state.pendingFollowUp as Extract<PendingFollowUp, { type: "inbound_alert" }>)}
                 data-testid="btn-inbound-yes"
@@ -1305,12 +1273,12 @@ function PanelOne() {
             state.mapOpening ? (
               <div
                 data-testid="map-opening"
-                style={{ marginTop: 10, fontFamily: FONT_MONO, fontSize: 11, color: SI.accentDeep, letterSpacing: "0.08em" }}
+                style={{ fontFamily: FONT_MONO, fontSize: 11, color: SI.accentDeep, letterSpacing: "0.08em" }}
               >
                 ◌ Opening map and parking hotspots…
               </div>
             ) : (
-              <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+              <div style={{ display: "flex", gap: 8 }}>
                 <button
                   onClick={acceptNavigation}
                   data-testid="btn-followup-yes"
@@ -1354,7 +1322,6 @@ function PanelOne() {
               onClick={() => dispatch({ type: "CLEAR_PENDING_FOLLOWUP" })}
               data-testid="btn-cancel-followup"
               style={{
-                marginTop: 8,
                 fontFamily: FONT_BODY,
                 fontSize: 11,
                 color: SI.amberDeep,
