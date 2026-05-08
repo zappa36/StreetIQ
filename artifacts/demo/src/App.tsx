@@ -557,11 +557,13 @@ function TopBar({
   state,
   dispatch,
   onRunDemo,
+  onStopDemo,
   onReset,
 }: {
   state: AppState;
   dispatch: React.Dispatch<Action>;
   onRunDemo: () => void;
+  onStopDemo: () => void;
   onReset: () => void;
 }) {
   const segBtn = (active: boolean) => ({
@@ -633,6 +635,25 @@ function TopBar({
           >
 ● DEMO RUNNING
           </span>
+        )}
+        {state.isRunningDemo && (
+          <button
+            data-testid="btn-sim-stop"
+            onClick={onStopDemo}
+            style={{
+              fontFamily: FONT_BODY,
+              fontSize: 12,
+              color: "#fff",
+              background: SI.rustDeep ?? "#a83c2a",
+              border: `1px solid ${SI.rustDeep ?? "#a83c2a"}`,
+              padding: "5px 12px",
+              borderRadius: 4,
+              cursor: "pointer",
+              fontWeight: 600,
+            }}
+          >
+            ■ Stop
+          </button>
         )}
         <button
           data-testid="btn-sim-reset"
@@ -905,25 +926,37 @@ export default function App() {
     playTtsAlert(`You have a new notification from Driver B. Would you like to hear it?`);
   };
 
-  const demoCancelledRef = useRef(false);
+  const demoRunIdRef = useRef(0);
+  const waitResolversRef = useRef<Array<() => void>>([]);
 
   const wait = (ms: number) =>
     new Promise<void>((resolve) => {
-      const t = setTimeout(resolve, ms);
+      const t = setTimeout(() => {
+        waitResolversRef.current = waitResolversRef.current.filter((r) => r !== resolve);
+        resolve();
+      }, ms);
       demoTimers.current.push(t);
+      waitResolversRef.current.push(resolve);
     });
 
-  const cancelled = () => demoCancelledRef.current;
+  // Resolves all hanging wait() promises so cancelled runners unwind to the next cancellation check.
+  const flushWaits = () => {
+    const pending = waitResolversRef.current;
+    waitResolversRef.current = [];
+    pending.forEach((r) => r());
+  };
+
+  const cancelled = (runId: number) => runId !== demoRunIdRef.current;
 
   // --- Scenario beats ---
-  const runScenarioNavigation = async () => {
+  const runScenarioNavigation = async (runId: number) => {
     await wait(500);
-    if (cancelled()) return;
+    if (cancelled(runId)) return;
     dispatch({ type: "SET_DRIVER_A_STATE", payload: "Approaching" });
     dispatch({ type: "ADD_EVENT", payload: `Driver A approaching P001` });
 
     await wait(500);
-    if (cancelled()) return;
+    if (cancelled(runId)) return;
     const q = `You're getting close to 12 Oak St. Want me to open the navigation app and show some parking hotspots nearby?`;
     dispatch({
       type: "SET_PENDING_FOLLOWUP",
@@ -931,25 +964,25 @@ export default function App() {
     });
     dispatch({ type: "ADD_EVENT", payload: `StreetIQ → Driver A: approach prompt (awaiting yes/no)` });
     await playTtsAlert(q);
-    if (cancelled()) return;
+    if (cancelled(runId)) return;
 
     await wait(900);
-    if (cancelled()) return;
+    if (cancelled(runId)) return;
     dispatch({ type: "SET_INTENT", payload: { intent: "confirm_yes", entity: "" } });
     dispatch({ type: "SET_MAP_OPENING", payload: true });
     dispatch({ type: "ADD_EVENT", payload: `Driver A: confirmed → opening navigation…` });
     const openTts = playTtsAlert("Opening the map and pulling up parking hotspots near you.");
     await wait(1600);
-    if (cancelled()) return;
+    if (cancelled(runId)) return;
     dispatch({ type: "SET_MAP_VISIBLE", payload: true });
     dispatch({ type: "ADD_EVENT", payload: `Map opened — parking hotspots loaded` });
     dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
     await openTts;
   };
 
-  const runScenarioDelay = async () => {
+  const runScenarioDelay = async (runId: number) => {
     await wait(700);
-    if (cancelled()) return;
+    if (cancelled(runId)) return;
     const target =
       stateRef.current.parcels.find((p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed"))
       ?? stateRef.current.parcels.find((p) => p.driver === "Driver A");
@@ -962,15 +995,15 @@ export default function App() {
     dispatch({ type: "APPLY_DELAY", payload: { parcelId: target.id, minutes: 10, reason: "heavy traffic" } });
 
     await wait(900);
-    if (cancelled()) return;
+    if (cancelled(runId)) return;
     await playTtsAlert(
       `Got it — I've pushed your ETA for ${target.id} back ten minutes for heavy traffic and let dispatch know.`
     );
   };
 
-  const runScenarioReroute = async () => {
+  const runScenarioReroute = async (runId: number) => {
     await wait(600);
-    if (cancelled()) return;
+    if (cancelled(runId)) return;
     dispatch({ type: "SET_TRANSCRIPT", payload: "the road is closed on Maple Street" });
     dispatch({ type: "SET_INTENT", payload: { intent: "road_closed", entity: "Maple Street" } });
     dispatch({ type: "ADD_EVENT", payload: `Driver A: road_closed "Maple Street"` });
@@ -978,18 +1011,18 @@ export default function App() {
     dispatch({ type: "ROAD_CLOSED_IMPACT" });
 
     await wait(1400);
-    if (cancelled()) return;
+    if (cancelled(runId)) return;
     dispatch({ type: "SET_B_ALERT_VISIBLE", payload: true });
     await playTtsAlert("Driver B — a colleague just reported Maple Street is closed. Want me to show an alternate route?");
-    if (cancelled()) return;
+    if (cancelled(runId)) return;
 
     await wait(1200);
-    if (cancelled()) return;
+    if (cancelled(runId)) return;
     dispatch({ type: "ADD_EVENT", payload: `Driver B accepted reroute for P004` });
     dispatch({ type: "DRIVER_B_ACCEPT_REROUTE" });
   };
 
-  const SCENARIO_RUNNERS: Array<() => Promise<void>> = [
+  const SCENARIO_RUNNERS: Array<(runId: number) => Promise<void>> = [
     runScenarioNavigation,
     runScenarioDelay,
     runScenarioReroute,
@@ -1006,8 +1039,10 @@ export default function App() {
   };
 
   const handleRunDemo = () => {
+    // Bump runId so any in-flight runner from a previous run becomes cancelled.
+    demoRunIdRef.current += 1;
     clearDemoTimers();
-    demoCancelledRef.current = false;
+    flushWaits();
     scriptedDemoActiveRef.current = true;
     dispatch({ type: "RESET_DEMO" });
     dispatch({ type: "SET_RUNNING_DEMO", payload: true });
@@ -1017,13 +1052,17 @@ export default function App() {
   const handleStartScenario = async () => {
     const idx = stateRef.current.scenarioIdx;
     if (idx < 0 || idx >= SCENARIO_RUNNERS.length) return;
+    const myRunId = demoRunIdRef.current;
     dispatch({ type: "SET_SCENARIO_GATE", payload: { idx, awaiting: false } });
     try {
-      await SCENARIO_RUNNERS[idx]();
+      await SCENARIO_RUNNERS[idx](myRunId);
     } finally {
-      if (!demoCancelledRef.current) {
+      // Only schedule the next scenario if this run is still the active one.
+      if (myRunId === demoRunIdRef.current) {
         await wait(600);
-        queueScenario(idx + 1);
+        if (myRunId === demoRunIdRef.current) {
+          queueScenario(idx + 1);
+        }
       }
     }
   };
@@ -1033,10 +1072,24 @@ export default function App() {
     queueScenario(idx + 1);
   };
 
-  const handleReset = () => {
-    demoCancelledRef.current = true;
+  const handleStopDemo = () => {
+    demoRunIdRef.current += 1;
     scriptedDemoActiveRef.current = false;
     clearDemoTimers();
+    flushWaits();
+    try { window.speechSynthesis?.cancel(); } catch {}
+    dispatch({ type: "SET_SPEAKING", payload: false });
+    dispatch({ type: "SET_RUNNING_DEMO", payload: false });
+    dispatch({ type: "SET_SCENARIO_GATE", payload: { idx: -1, awaiting: false } });
+    dispatch({ type: "ADD_EVENT", payload: `Scripted demo stopped by user` });
+  };
+
+  const handleReset = () => {
+    demoRunIdRef.current += 1;
+    scriptedDemoActiveRef.current = false;
+    clearDemoTimers();
+    flushWaits();
+    try { window.speechSynthesis?.cancel(); } catch {}
     dispatch({ type: "RESET_DEMO" });
   };
 
@@ -1054,7 +1107,7 @@ export default function App() {
           overflow: "hidden",
         }}
       >
-        <TopBar state={state} dispatch={dispatch} onRunDemo={handleRunDemo} onReset={handleReset} />
+        <TopBar state={state} dispatch={dispatch} onRunDemo={handleRunDemo} onStopDemo={handleStopDemo} onReset={handleReset} />
 
         {state.awaitingScenarioStart && state.scenarioIdx >= 0 && state.scenarioIdx < SCENARIOS.length && (
           <div
