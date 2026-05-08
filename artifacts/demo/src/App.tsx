@@ -308,9 +308,9 @@ function reducer(state: AppState, action: Action): AppState {
     case "SET_INTENT":
       return { ...state, lastIntent: action.payload.intent, lastEntity: action.payload.entity };
     case "SET_LISTENING":
-      return { ...state, isListening: action.payload };
+      return { ...state, isListening: action.payload, ...(action.payload ? { spokenCaption: "" } : {}) };
     case "SET_SPEAKING":
-      return { ...state, isSpeaking: action.payload, ...(action.payload ? {} : { spokenCaption: "" }) };
+      return { ...state, isSpeaking: action.payload };
     case "SET_SPOKEN_CAPTION":
       return { ...state, spokenCaption: action.payload };
     case "SET_RUNNING_DEMO":
@@ -1363,7 +1363,7 @@ function PanelOne() {
           {mode === "listening" ? "● rec" : mode === "speaking" ? "otto" : "speak"}
         </button>
         <div style={{ minHeight: 56, textAlign: "center", maxWidth: 320 }}>
-          {mode === "speaking" && state.spokenCaption ? (
+          {state.spokenCaption ? (
             <div
               data-testid="spoken-caption"
               style={{
