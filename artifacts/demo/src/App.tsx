@@ -87,6 +87,7 @@ interface AppState {
   lastIntent: string;
   lastEntity: string;
   isListening: boolean;
+  isSpeaking: boolean;
   isRunningDemo: boolean;
   pendingFollowUp: PendingFollowUp | null;
 }
@@ -110,6 +111,7 @@ type Action =
   | { type: "SET_TRANSCRIPT"; payload: string }
   | { type: "SET_INTENT"; payload: { intent: string; entity: string } }
   | { type: "SET_LISTENING"; payload: boolean }
+  | { type: "SET_SPEAKING"; payload: boolean }
   | { type: "SET_RUNNING_DEMO"; payload: boolean }
   | { type: "UPDATE_PARCELS"; payload: Parcel[] }
   | { type: "SET_PENDING_FOLLOWUP"; payload: PendingFollowUp }
@@ -157,6 +159,7 @@ const initialState: AppState = {
   lastIntent: "",
   lastEntity: "",
   isListening: false,
+  isSpeaking: false,
   isRunningDemo: false,
   pendingFollowUp: null,
 };
@@ -220,7 +223,6 @@ function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "SET_DRIVER_A_STATE": {
       let newState = { ...state, driverAState: action.payload };
-      if (action.payload === "Approaching") newState.mapVisible = true;
       if (action.payload === "Parked" && state.driverAState !== "Parked") {
         newState.heatmapSpots = state.heatmapSpots.map((s) =>
           s.id === "P-2" ? { ...s, confirmations: s.confirmations + 1 } : s
@@ -248,7 +250,6 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         roadClosed: true,
-        mapVisible: true,
         driverARerouteOverlayDismissed: false,
         parcels: state.parcels.map((p) =>
           p.id === "P001" || p.id === "P002"
@@ -305,6 +306,8 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, lastIntent: action.payload.intent, lastEntity: action.payload.entity };
     case "SET_LISTENING":
       return { ...state, isListening: action.payload };
+    case "SET_SPEAKING":
+      return { ...state, isSpeaking: action.payload };
     case "SET_RUNNING_DEMO":
       return { ...state, isRunningDemo: action.payload };
     case "UPDATE_PARCELS":
@@ -657,8 +660,6 @@ function TopBar({
 // Bottom strip (26px)
 // ============================================================
 function BottomStrip() {
-  const time = new Date();
-  const t = `${time.getHours().toString().padStart(2, "0")}:${time.getMinutes().toString().padStart(2, "0")}`;
   return (
     <div
       style={{
@@ -677,7 +678,7 @@ function BottomStrip() {
       }}
     >
       <span>CLOSED-LOOP DEMO · A SPEAKS → DISPATCH UPDATES → B IS ALERTED</span>
-      <span>{t}</span>
+      <span>BMW · OPS CONSOLE</span>
     </div>
   );
 }
@@ -715,13 +716,15 @@ export default function App() {
           contextLabel: nextStop ? `${nextStop.id} — ${nextStop.address}` : "next stop",
         },
       });
-      dispatch({ type: "ADD_EVENT", payload: `FleetMind → Driver A: approach prompt (awaiting yes/no)` });
+      dispatch({ type: "ADD_EVENT", payload: `StreetIQ → Driver A: approach prompt (awaiting yes/no)` });
       playTtsAlert(question);
     }
     prevDriverAStateRef.current = state.driverAState;
   }, [state.driverAState]);
 
   const playTtsAlert = async (text: string) => {
+    const markStart = () => dispatch({ type: "SET_SPEAKING", payload: true });
+    const markEnd = () => dispatch({ type: "SET_SPEAKING", payload: false });
     try {
       const ttsRes = await fetch("/api/tts", {
         method: "POST",
@@ -732,7 +735,10 @@ export default function App() {
         const blob = await ttsRes.blob();
         const url = URL.createObjectURL(blob);
         const audio = new Audio(url);
-        audio.play();
+        markStart();
+        audio.onended = markEnd;
+        audio.onerror = markEnd;
+        audio.play().catch(markEnd);
         return;
       }
     } catch {
@@ -741,6 +747,9 @@ export default function App() {
     if ("speechSynthesis" in window) {
       const utt = new SpeechSynthesisUtterance(text);
       utt.rate = 1;
+      utt.onstart = markStart;
+      utt.onend = markEnd;
+      utt.onerror = markEnd;
       window.speechSynthesis.speak(utt);
     }
   };
@@ -848,7 +857,7 @@ export default function App() {
   const triggerInboundAlert = (scenarioId: DriverBScenarioId) => {
     const sc = DRIVER_B_SCENARIOS[scenarioId];
     dispatch({ type: "ADD_EVENT", payload: `Driver B → Dispatch: ${sc.summary}` });
-    dispatch({ type: "ADD_EVENT", payload: `FleetMind → Driver A: relaying alert (awaiting yes/no)` });
+    dispatch({ type: "ADD_EVENT", payload: `StreetIQ → Driver A: relaying alert (awaiting yes/no)` });
     const question = `New notification from Driver B about ${sc.summary.toLowerCase()}. Would you like to hear it?`;
     dispatch({
       type: "SET_PENDING_FOLLOWUP",
@@ -913,10 +922,10 @@ export default function App() {
           <PanelShell index="02" title="Adaptive Map" sub="shared layer" tone="amber" bg={SI.bgDeep}>
             <PanelTwo />
           </PanelShell>
-          <PanelShell index="03" title="Dispatch" sub="6 stops · 2 drivers" tone="ink2" bg={SI.bg}>
+          <PanelShell index="03" title="Dispatch" sub="6 stops · 2 drivers" tone="rust" bg={SI.bg}>
             <PanelThree />
           </PanelShell>
-          <PanelShell index="04" title="Proactive Copilot" sub="Driver B → A" tone="rust" bg={SI.bgDeep}>
+          <PanelShell index="04" title="Proactive Copilot" sub="Driver B → A" tone="ink2" bg={SI.bgDeep}>
             <PanelFour />
           </PanelShell>
         </div>
@@ -939,7 +948,7 @@ function PanelOne() {
     dispatch({ type: "SET_INTENT", payload: { intent: "confirm_yes", entity: alert.scenarioId } });
     dispatch({ type: "ADD_EVENT", payload: `Driver A: accepted alert "${alert.summary}"` });
     dispatch({ type: "APPLY_INBOUND_SCENARIO", payload: { scenarioId: alert.scenarioId } });
-    dispatch({ type: "ADD_EVENT", payload: `FleetMind → Driver A: ${alert.fullMessage}` });
+    dispatch({ type: "ADD_EVENT", payload: `StreetIQ → Driver A: ${alert.fullMessage}` });
     dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
     playInboundTts(alert.fullMessage);
   };
@@ -1141,7 +1150,7 @@ function PanelOne() {
   };
 
   const aParcel = state.parcels.find((p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed"));
-  const mode = (state.isListening ? "listening" : "standby") as "standby" | "listening" | "speaking";
+  const mode: "standby" | "listening" | "speaking" = state.isListening ? "listening" : state.isSpeaking ? "speaking" : "standby";
   const stateColor = state.driverAState === "Driving" ? SI.accent : state.driverAState === "Approaching" ? SI.amber : SI.accentDeep;
 
   return (
@@ -1245,7 +1254,7 @@ function PanelOne() {
               marginBottom: 4,
             }}
           >
-            FleetMind asks
+            StreetIQ asks
           </div>
           <div style={{ fontFamily: FONT_HEAD, fontSize: 14, fontStyle: "italic", color: SI.ink, lineHeight: 1.4 }}>
             {state.pendingFollowUp.question}
@@ -1454,6 +1463,39 @@ function PanelOne() {
               Tap to speak · or say "Hey Otto"
             </div>
           )}
+        </div>
+
+        {/* Quick-test transcript chips */}
+        <div style={{ marginTop: 4, display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", maxWidth: 360 }}>
+          {[
+            { label: "road closed on Maple", text: "the road is closed on Maple Street" },
+            { label: "no parking", text: "I can't find parking" },
+            { label: "customer not home", text: "the customer is not home" },
+            { label: "delivered", text: "delivered" },
+          ].map((c) => (
+            <button
+              key={c.label}
+              data-testid={`btn-chip-${c.label.replace(/\s+/g, "-")}`}
+              onClick={async () => {
+                dispatch({ type: "SET_TRANSCRIPT", payload: c.text });
+                await routeTranscript(c.text);
+              }}
+              style={{
+                fontFamily: FONT_MONO,
+                fontSize: 9,
+                color: SI.inkSoft,
+                background: SI.surfaceUp,
+                border: `1px solid ${SI.hair}`,
+                padding: "4px 8px",
+                borderRadius: 999,
+                cursor: "pointer",
+                letterSpacing: "0.06em",
+                fontWeight: 500,
+              }}
+            >
+              {c.label}
+            </button>
+          ))}
         </div>
       </div>
     </div>
@@ -1846,9 +1888,11 @@ function PanelThree() {
 // Panel 04 — Proactive Copilot (Driver B → Driver A scenario triggers)
 // ============================================================
 function PanelFour() {
-  const { state, triggerInboundAlert } = useDemo();
+  const { state, dispatch, triggerInboundAlert } = useDemo();
   const bParcel = state.parcels.find((p) => p.driver === "Driver B" && p.status === "pending");
   const pendingAlert = state.pendingFollowUp?.type === "inbound_alert" ? state.pendingFollowUp : null;
+  const showProactiveCard = state.driverBAlertVisible;
+  const acceptedReroute = state.driverBRerouteAccepted === true;
 
   const toneColor = (t: "amber" | "rust" | "accent") =>
     t === "amber"
@@ -1934,6 +1978,124 @@ function PanelFour() {
         </div>
       )}
 
+      {/* Proactive alert card — appears when scripted demo / road-closed pushes alert to B */}
+      {showProactiveCard && (
+        <motion.div
+          initial={{ opacity: 0, y: -6 }}
+          animate={{ opacity: 1, y: 0 }}
+          data-testid="proactive-alert-card"
+          style={{
+            marginTop: 12,
+            padding: "12px 14px",
+            background: SI.surfaceUp,
+            border: `1px solid ${SI.hair}`,
+            borderLeft: `4px solid ${SI.amberDeep}`,
+            borderRadius: 10,
+          }}
+        >
+          <div
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 10,
+              color: SI.amberDeep,
+              letterSpacing: "0.18em",
+              fontWeight: 700,
+              textTransform: "uppercase",
+              marginBottom: 4,
+            }}
+          >
+            StreetIQ · proactive alert
+          </div>
+          <div style={{ fontFamily: FONT_HEAD, fontSize: 14, color: SI.ink, lineHeight: 1.4 }}>
+            Driver A reports Maple Street is closed. Reroute via 2nd Ave adds ~15 min.
+          </div>
+          <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+            <button
+              data-testid="btn-accept-reroute"
+              onClick={() => dispatch({ type: "DRIVER_B_ACCEPT_REROUTE" })}
+              style={{
+                flex: 1,
+                fontFamily: FONT_BODY,
+                fontSize: 12,
+                fontWeight: 600,
+                background: SI.accentDeep,
+                color: "#fff",
+                border: "none",
+                padding: "7px 10px",
+                borderRadius: 6,
+                cursor: "pointer",
+              }}
+            >
+              Accept reroute
+            </button>
+            <button
+              data-testid="btn-dismiss-reroute"
+              onClick={() => dispatch({ type: "SET_B_ALERT_VISIBLE", payload: false })}
+              style={{
+                flex: 1,
+                fontFamily: FONT_BODY,
+                fontSize: 12,
+                fontWeight: 500,
+                background: SI.surface,
+                color: SI.inkSoft,
+                border: `1px solid ${SI.hair}`,
+                padding: "7px 10px",
+                borderRadius: 6,
+                cursor: "pointer",
+              }}
+            >
+              Dismiss
+            </button>
+          </div>
+        </motion.div>
+      )}
+
+      {acceptedReroute && !showProactiveCard && (
+        <div
+          data-testid="reroute-accepted-mini"
+          style={{
+            marginTop: 12,
+            padding: "10px 12px",
+            background: SI.accentWash,
+            border: `1px solid ${SI.hair}`,
+            borderRadius: 10,
+          }}
+        >
+          <div style={{ fontFamily: FONT_MONO, fontSize: 10, color: SI.accentDeep, letterSpacing: "0.14em", fontWeight: 700 }}>
+            ✓ REROUTE APPLIED
+          </div>
+          <svg viewBox="0 0 200 60" style={{ width: "100%", height: 56, marginTop: 6 }}>
+            <line x1="10" y1="40" x2="60" y2="40" stroke={SI.hair} strokeWidth="6" strokeLinecap="round" />
+            <line x1="60" y1="40" x2="60" y2="14" stroke={SI.amber} strokeWidth="3" strokeDasharray="4 3" />
+            <line x1="60" y1="14" x2="140" y2="14" stroke={SI.amber} strokeWidth="3" strokeDasharray="4 3" />
+            <line x1="140" y1="14" x2="140" y2="40" stroke={SI.amber} strokeWidth="3" strokeDasharray="4 3" />
+            <line x1="140" y1="40" x2="190" y2="40" stroke={SI.hair} strokeWidth="6" strokeLinecap="round" />
+            <circle cx="10" cy="40" r="4" fill={SI.ink} />
+            <circle cx="190" cy="40" r="4" fill={SI.accentDeep} />
+          </svg>
+        </div>
+      )}
+
+      {!showProactiveCard && !acceptedReroute && !pendingAlert && (
+        <div
+          data-testid="awaiting-intelligence"
+          style={{
+            marginTop: 12,
+            padding: "14px 16px",
+            border: `1px dashed ${SI.hair}`,
+            borderRadius: 10,
+            fontFamily: FONT_HEAD,
+            fontStyle: "italic",
+            fontSize: 12,
+            color: SI.inkFaint,
+            textAlign: "center",
+            letterSpacing: "0.04em",
+          }}
+        >
+          Awaiting intelligence
+        </div>
+      )}
+
       <div
         style={{
           marginTop: 18,
@@ -1956,7 +2118,7 @@ function PanelFour() {
           lineHeight: 1.45,
         }}
       >
-        Tap to relay an alert to Driver A. The dashboard updates immediately, then FleetMind asks Driver A by voice if they want to hear the details.
+        Tap to relay an alert to Driver A. The dashboard updates immediately, then StreetIQ asks Driver A by voice if they want to hear the details.
       </div>
 
       <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
