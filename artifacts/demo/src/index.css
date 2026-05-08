@@ -82,10 +82,34 @@
   --chart-3: 197 37% 24%;
   --chart-4: 43 74% 66%;
   --chart-5: 27 87% 67%;
-  --app-font-sans: 'Inter', sans-serif;
+  --app-font-sans: 'Inter', system-ui, sans-serif;
   --app-font-serif: Georgia, serif;
-  --app-font-mono: 'Space Mono', 'Menlo', monospace;
+  --app-font-mono: 'JetBrains Mono', 'Space Mono', 'Menlo', monospace;
+  --app-font-head: 'Space Grotesk', 'Inter', system-ui, sans-serif;
   --radius: 0.5rem;
+
+  /* StreetIQ BMW theme tokens */
+  --si-bg: #F2F5F9;
+  --si-bg-deep: #F8FAFC;
+  --si-surface: #FAFBFD;
+  --si-surface-up: #FFFFFF;
+  --si-hair: #CFD6DF;
+  --si-hair-soft: #DDE2EA;
+  --si-ink: #1C1B1A;
+  --si-ink-soft: #5A5752;
+  --si-ink-faint: #8E8B85;
+  --si-accent: oklch(58% 0.16 250);
+  --si-accent-deep: oklch(42% 0.17 250);
+  --si-accent-wash: oklch(94% 0.03 250);
+  --si-amber: oklch(74% 0.15 75);
+  --si-amber-deep: oklch(56% 0.14 75);
+  --si-amber-wash: oklch(95% 0.05 75);
+  --si-rust: oklch(60% 0.17 30);
+  --si-rust-deep: oklch(48% 0.16 30);
+  --si-rust-wash: oklch(94% 0.04 30);
+  --si-ink2: oklch(50% 0.10 245);
+  --si-ink2-deep: oklch(38% 0.11 245);
+  --si-ink2-wash: oklch(94% 0.03 245);
 }
 
 .dark {
@@ -119,4 +143,14 @@
   body {
     @apply font-sans antialiased bg-background text-foreground;
   }
+}
+
+@keyframes siBar {
+  0% { transform: scaleY(0.32); }
+  100% { transform: scaleY(1); }
+}
+
+@keyframes siLivePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
 }
