@@ -2276,23 +2276,6 @@ function PanelFour() {
             >
               <div style={{ fontFamily: FONT_HEAD, fontSize: 13, color: SI.ink, fontWeight: 500, lineHeight: 1.25 }}>{sc.label}</div>
               <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: SI.inkSoft, marginTop: 2, lineHeight: 1.35 }}>{sc.shortHint}</div>
-              <span
-                style={{
-                  display: "inline-block",
-                  marginTop: 5,
-                  fontFamily: FONT_MONO,
-                  fontSize: 9,
-                  color: tc.deep,
-                  background: tc.wash,
-                  padding: "1px 6px",
-                  borderRadius: 3,
-                  letterSpacing: "0.12em",
-                  fontWeight: 700,
-                  textTransform: "uppercase",
-                }}
-              >
-                affects Driver A
-              </span>
             </button>
           );
         })}
