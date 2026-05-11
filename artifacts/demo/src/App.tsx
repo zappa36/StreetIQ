@@ -1618,17 +1618,17 @@ function PanelOne() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.resetSignal]);
 
-  // When continuous mode is on and a follow-up question is pending (e.g. an
-  // inbound Driver B notification asking "Would you like to hear it?"),
-  // automatically open a continuous session so the driver can answer hands-free.
+  // When continuous mode is on, automatically open the microphone so the driver
+  // can speak hands-free. This fires both when continuous mode is first turned
+  // on and whenever a follow-up question becomes pending (e.g. an inbound
+  // Driver B notification asking "Would you like to hear it?").
   useEffect(() => {
     if (!state.continuousMode) return;
-    if (!state.pendingFollowUp) return;
     if (sessionActiveRef.current) return;
     if (state.isListening) return;
     setSessionActiveBoth(true);
     dispatch({ type: "ADD_EVENT", payload: "Driver A: continuous voice session started" });
-    // Wait until Otto has finished asking the question, then start listening.
+    // Wait until Otto has finished any in-flight TTS, then start listening.
     (async () => {
       await waitWhileSpeaking();
       if (sessionActiveRef.current && continuousModeRef.current) startRecognitionCycle();
