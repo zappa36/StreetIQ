@@ -2272,127 +2272,180 @@ function PanelThree() {
     }
   };
 
-  return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
-      {/* Parcels table */}
-      <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "14px 16px" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr>
-              {["ID", "STOP", "CUSTOMER", "DRV", "ETA"].map((h, i) => (
-                <th
-                  key={h}
+  const driverASections = state.parcels.filter((p) => p.driver === "Driver A");
+  const driverBSections = state.parcels.filter((p) => p.driver === "Driver B");
+
+  const renderHeader = () => (
+    <thead>
+      <tr>
+        {["ID", "STOP", "CUSTOMER", "DRV", "ETA"].map((h, i) => (
+          <th
+            key={h}
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 9,
+              color: SI.inkFaint,
+              letterSpacing: "0.18em",
+              fontWeight: 700,
+              textAlign: i >= 3 ? "right" : "left",
+              padding: "0 8px 8px",
+              borderBottom: `1px solid ${SI.hair}`,
+            }}
+          >
+            {h}
+          </th>
+        ))}
+      </tr>
+    </thead>
+  );
+
+  const renderRow = (p: Parcel) => {
+    const dc = driverChip(p.driver);
+    const sc = statusChip(p.status);
+    const isCurrent = p.id === state.currentParcelId;
+    const isSelectable = p.driver === "Driver A" && p.status !== "delivered";
+    return (
+      <tr
+        key={p.id}
+        data-testid={`parcel-row-${p.id}`}
+        onClick={isSelectable ? () => dispatch({ type: "SET_CURRENT_PARCEL", payload: { parcelId: p.id } }) : undefined}
+        style={{
+          borderBottom: `1px solid ${SI.hairSoft}`,
+          cursor: isSelectable ? "pointer" : "default",
+          background: isCurrent ? SI.accentWash : "transparent",
+          boxShadow: isCurrent ? `inset 3px 0 0 ${SI.accentDeep}` : "none",
+        }}>
+        <td style={{ padding: "8px", fontFamily: FONT_MONO, fontSize: 11, color: SI.inkSoft }}>{p.id}</td>
+        <td style={{ padding: "8px" }}>
+          <div style={{ fontFamily: FONT_HEAD, fontSize: 13, color: SI.ink, fontWeight: 500, lineHeight: 1.2 }}>{p.address}</div>
+          {(p.delayReasons ?? []).length > 0 && (
+            <div data-testid={`delay-reasons-${p.id}`} style={{ marginTop: 3, display: "flex", flexWrap: "wrap", gap: 3 }}>
+              {(p.delayReasons ?? []).map((r, i) => (
+                <span
+                  key={i}
                   style={{
                     fontFamily: FONT_MONO,
                     fontSize: 9,
-                    color: SI.inkFaint,
-                    letterSpacing: "0.18em",
-                    fontWeight: 700,
-                    textAlign: i >= 3 ? "right" : "left",
-                    padding: "0 8px 8px",
-                    borderBottom: `1px solid ${SI.hair}`,
+                    color: SI.amberDeep,
+                    background: SI.amberWash,
+                    padding: "1px 5px",
+                    borderRadius: 3,
+                    letterSpacing: "0.04em",
                   }}
                 >
-                  {h}
-                </th>
+                  {r}
+                </span>
               ))}
-            </tr>
-          </thead>
-          <tbody>
-            {state.parcels.map((p) => {
-              const dc = driverChip(p.driver);
-              const sc = statusChip(p.status);
-              const isCurrent = p.id === state.currentParcelId;
-              const isSelectable = p.driver === "Driver A" && p.status !== "delivered";
-              return (
-                <tr
-                  key={p.id}
-                  data-testid={`parcel-row-${p.id}`}
-                  onClick={isSelectable ? () => dispatch({ type: "SET_CURRENT_PARCEL", payload: { parcelId: p.id } }) : undefined}
-                  style={{
-                    borderBottom: `1px solid ${SI.hairSoft}`,
-                    cursor: isSelectable ? "pointer" : "default",
-                    background: isCurrent ? SI.accentWash : "transparent",
-                    boxShadow: isCurrent ? `inset 3px 0 0 ${SI.accentDeep}` : "none",
-                  }}>
-                  <td style={{ padding: "8px", fontFamily: FONT_MONO, fontSize: 11, color: SI.inkSoft }}>{p.id}</td>
-                  <td style={{ padding: "8px" }}>
-                    <div style={{ fontFamily: FONT_HEAD, fontSize: 13, color: SI.ink, fontWeight: 500, lineHeight: 1.2 }}>{p.address}</div>
-                    {(p.delayReasons ?? []).length > 0 && (
-                      <div data-testid={`delay-reasons-${p.id}`} style={{ marginTop: 3, display: "flex", flexWrap: "wrap", gap: 3 }}>
-                        {(p.delayReasons ?? []).map((r, i) => (
-                          <span
-                            key={i}
-                            style={{
-                              fontFamily: FONT_MONO,
-                              fontSize: 9,
-                              color: SI.amberDeep,
-                              background: SI.amberWash,
-                              padding: "1px 5px",
-                              borderRadius: 3,
-                              letterSpacing: "0.04em",
-                            }}
-                          >
-                            {r}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </td>
-                  <td style={{ padding: "8px", fontFamily: FONT_BODY, fontSize: 11, color: SI.inkSoft }}>{p.customer}</td>
-                  <td style={{ padding: "8px", textAlign: "right" }}>
-                    <span
-                      style={{
-                        fontFamily: FONT_MONO,
-                        fontSize: 10,
-                        background: dc.bg,
-                        color: dc.color,
-                        padding: "2px 7px",
-                        borderRadius: 4,
-                        fontWeight: 700,
-                        letterSpacing: "0.1em",
-                      }}
-                    >
-                      {dc.label}
-                    </span>
-                  </td>
-                  <td style={{ padding: "8px", textAlign: "right" }}>
-                    {p.eta !== p.originalEta ? (
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", lineHeight: 1.1 }}>
-                        <span style={{ fontFamily: FONT_MONO, fontSize: 12, color: SI.amberDeep, fontWeight: 600 }}>{p.eta}</span>
-                        <span
-                          data-testid={`original-eta-${p.id}`}
-                          style={{ fontFamily: FONT_MONO, fontSize: 9, color: SI.inkFaint, textDecoration: "line-through" }}
-                        >
-                          was {p.originalEta}
-                        </span>
-                      </div>
-                    ) : (
-                      <span style={{ fontFamily: FONT_MONO, fontSize: 12, color: SI.ink, fontWeight: 500 }}>{p.eta}</span>
-                    )}
-                    <div style={{ marginTop: 3 }}>
-                      <span
-                        style={{
-                          fontFamily: FONT_MONO,
-                          fontSize: 9,
-                          color: sc.color,
-                          background: sc.bg,
-                          padding: "1px 5px",
-                          borderRadius: 3,
-                          letterSpacing: "0.1em",
-                          textTransform: "uppercase",
-                          fontWeight: 700,
-                          border: `1px solid ${SI.hair}`,
-                        }}
-                      >
-                        {p.status}
-                      </span>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
+            </div>
+          )}
+        </td>
+        <td style={{ padding: "8px", fontFamily: FONT_BODY, fontSize: 11, color: SI.inkSoft }}>{p.customer}</td>
+        <td style={{ padding: "8px", textAlign: "right" }}>
+          <span
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 10,
+              background: dc.bg,
+              color: dc.color,
+              padding: "2px 7px",
+              borderRadius: 4,
+              fontWeight: 700,
+              letterSpacing: "0.1em",
+            }}
+          >
+            {dc.label}
+          </span>
+        </td>
+        <td style={{ padding: "8px", textAlign: "right" }}>
+          {p.eta !== p.originalEta ? (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", lineHeight: 1.1 }}>
+              <span style={{ fontFamily: FONT_MONO, fontSize: 12, color: SI.amberDeep, fontWeight: 600 }}>{p.eta}</span>
+              <span
+                data-testid={`original-eta-${p.id}`}
+                style={{ fontFamily: FONT_MONO, fontSize: 9, color: SI.inkFaint, textDecoration: "line-through" }}
+              >
+                was {p.originalEta}
+              </span>
+            </div>
+          ) : (
+            <span style={{ fontFamily: FONT_MONO, fontSize: 12, color: SI.ink, fontWeight: 500 }}>{p.eta}</span>
+          )}
+          <div style={{ marginTop: 3 }}>
+            <span
+              style={{
+                fontFamily: FONT_MONO,
+                fontSize: 9,
+                color: sc.color,
+                background: sc.bg,
+                padding: "1px 5px",
+                borderRadius: 3,
+                letterSpacing: "0.1em",
+                textTransform: "uppercase",
+                fontWeight: 700,
+                border: `1px solid ${SI.hair}`,
+              }}
+            >
+              {p.status}
+            </span>
+          </div>
+        </td>
+      </tr>
+    );
+  };
+
+  const driverHeader = (label: string, count: number, accent: string, accentWash: string) => (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        padding: "6px 8px",
+        marginTop: 8,
+        marginBottom: 6,
+        borderLeft: `3px solid ${accent}`,
+        background: accentWash,
+        borderRadius: 4,
+      }}
+    >
+      <span
+        style={{
+          fontFamily: FONT_MONO,
+          fontSize: 10,
+          color: accent,
+          letterSpacing: "0.18em",
+          fontWeight: 700,
+          textTransform: "uppercase",
+        }}
+      >
+        {label}
+      </span>
+      <span
+        style={{
+          fontFamily: FONT_MONO,
+          fontSize: 10,
+          color: accent,
+          fontWeight: 600,
+          letterSpacing: "0.08em",
+        }}
+      >
+        {count} {count === 1 ? "stop" : "stops"}
+      </span>
+    </div>
+  );
+
+  return (
+    <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+      {/* Parcels — split by driver */}
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "14px 16px" }}>
+        {driverHeader("Driver A", driverASections.length, SI.accentDeep, SI.accentWash)}
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          {renderHeader()}
+          <tbody>{driverASections.map(renderRow)}</tbody>
+        </table>
+        {driverHeader("Driver B", driverBSections.length, SI.ink2Deep, SI.ink2Wash)}
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          {renderHeader()}
+          <tbody>{driverBSections.map(renderRow)}</tbody>
         </table>
       </div>
 
