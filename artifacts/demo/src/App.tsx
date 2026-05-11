@@ -3004,7 +3004,7 @@ function PanelFour() {
               cursor: customMsg.trim() && !pendingAlert ? "pointer" : "not-allowed",
             }}
           >
-            Send to Driver A
+            Send
           </button>
         </div>
       </div>
