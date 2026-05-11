@@ -1167,6 +1167,7 @@ export default function App() {
         }
       } else {
         dispatch({ type: "ADD_EVENT", payload: `Driver A: delay_reported but no matching parcel found` });
+        playTtsAlert("Which delivery is the delay for? You can say 'next', the parcel number, or the street.");
       }
     } else if (intent === "ahead_reported") {
       const target = resolveDelayParcel(extras.parcelRef);
@@ -1196,6 +1197,7 @@ export default function App() {
         }
       } else {
         dispatch({ type: "ADD_EVENT", payload: `Driver A: ahead_reported but no matching parcel found` });
+        playTtsAlert("Which delivery are you ahead on? You can say 'next', the parcel number, or the street.");
       }
     }
   };
@@ -1920,7 +1922,23 @@ function PanelOne() {
     return { minutes, reason };
   };
 
+  const askForClarification = (heard: string) => {
+    const snippet = heard.trim().slice(0, 60);
+    dispatch({ type: "ADD_EVENT", payload: `Driver A: unclear input${snippet ? ` ("${snippet}${heard.length > 60 ? "…" : ""}")` : ""}` });
+    dispatch({ type: "SET_INTENT", payload: { intent: "clarify_needed", entity: snippet } });
+    const prompt = snippet.length === 0
+      ? "Sorry, I didn't catch that. Could you repeat?"
+      : "Sorry, I didn't quite get that. Could you say it again, or give me a bit more detail?";
+    playTtsAlert(prompt);
+  };
+
   const classifyTranscript = async (text: string) => {
+    const trimmed = text.trim();
+    // Very short or empty transcripts → ask to repeat instead of guessing.
+    if (trimmed.length === 0 || trimmed.split(/\s+/).length < 2) {
+      askForClarification(trimmed);
+      return;
+    }
     try {
       const res = await fetch("/api/classify", {
         method: "POST",
@@ -1929,6 +1947,12 @@ function PanelOne() {
       });
       if (res.ok) {
         const data = await res.json();
+        const confidence = typeof data.confidence === "number" ? data.confidence : 1;
+        // Low-confidence or unclassifiable → ask the driver to clarify.
+        if (data.intent === "general" || confidence < 0.5) {
+          askForClarification(text);
+          return;
+        }
         const extras: DelayExtras = {};
         if (typeof data.parcelRef === "string") extras.parcelRef = data.parcelRef;
         if (typeof data.minutes === "number") extras.minutes = data.minutes;
@@ -1960,7 +1984,7 @@ function PanelOne() {
     else if (lower.includes("not home") || lower.includes("nobody")) processIntent("customer_not_home", "");
     else if (lower.includes("delivered") || lower.includes("done")) processIntent("delivery_complete", "");
     else if (lower.includes("map") || lower.includes("navigate")) processIntent("request_map", "");
-    else processIntent("general", "");
+    else askForClarification(text);
   };
 
   const aParcel =
