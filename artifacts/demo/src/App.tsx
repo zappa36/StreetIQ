@@ -861,7 +861,19 @@ export default function App() {
     prevDriverAStateRef.current = state.driverAState;
   }, [state.driverAState]);
 
+  // Track the currently playing TTS so a new turn can interrupt it
+  // (e.g. user hits "Read it" while Otto is mid-sentence).
+  const currentTtsRef = useRef<{ token: number; cancel: () => void } | null>(null);
+  const ttsTokenRef = useRef(0);
+
   const playTtsAlert = async (text: string): Promise<void> => {
+    // If a previous TTS is still playing, cancel it so the new message starts
+    // immediately instead of overlapping.
+    if (currentTtsRef.current) {
+      try { currentTtsRef.current.cancel(); } catch { /* ignore */ }
+      currentTtsRef.current = null;
+    }
+    const myToken = ++ttsTokenRef.current;
     // Track every TTS turn from invocation through completion so the
     // continuous-mode recognizer can wait for the whole turn — including the
     // async fetch latency before isSpeaking flips true.
@@ -872,6 +884,7 @@ export default function App() {
     };
     const markEnd = () => dispatch({ type: "SET_SPEAKING", payload: false });
     const finish = () => dispatch({ type: "TTS_IN_FLIGHT_DELTA", payload: -1 });
+    const isCurrent = () => ttsTokenRef.current === myToken;
     try {
       try {
         const ttsRes = await fetch("/api/tts", {
@@ -879,15 +892,30 @@ export default function App() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text, voice: "nova" }),
         });
+        // Another turn may have superseded us during the fetch — abort.
+        if (!isCurrent()) return;
         if (ttsRes.ok) {
           const blob = await ttsRes.blob();
+          if (!isCurrent()) return;
           const url = URL.createObjectURL(blob);
           const audio = new Audio(url);
           markStart();
           return await new Promise<void>((resolve) => {
+            let resolved = false;
             const done = () => {
-              markEnd();
+              if (resolved) return;
+              resolved = true;
+              if (isCurrent()) markEnd();
+              if (currentTtsRef.current?.token === myToken) currentTtsRef.current = null;
               resolve();
+            };
+            currentTtsRef.current = {
+              token: myToken,
+              cancel: () => {
+                try { audio.pause(); } catch { /* ignore */ }
+                try { audio.currentTime = 0; } catch { /* ignore */ }
+                done();
+              },
             };
             audio.onended = done;
             audio.onerror = done;
@@ -897,17 +925,29 @@ export default function App() {
       } catch {
         /* fall through */
       }
+      if (!isCurrent()) return;
       if ("speechSynthesis" in window) {
         return await new Promise<void>((resolve) => {
+          let resolved = false;
           const utt = new SpeechSynthesisUtterance(text);
           utt.rate = 1;
           utt.onstart = markStart;
           const done = () => {
-            markEnd();
+            if (resolved) return;
+            resolved = true;
+            if (isCurrent()) markEnd();
+            if (currentTtsRef.current?.token === myToken) currentTtsRef.current = null;
             resolve();
           };
           utt.onend = done;
           utt.onerror = done;
+          currentTtsRef.current = {
+            token: myToken,
+            cancel: () => {
+              try { window.speechSynthesis.cancel(); } catch { /* ignore */ }
+              done();
+            },
+          };
           window.speechSynthesis.speak(utt);
         });
       }
