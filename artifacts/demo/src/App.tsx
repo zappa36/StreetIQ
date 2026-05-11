@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useReducer, useEffect, useRef } from "react";
+import React, { createContext, useContext, useReducer, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
 // --- BMW theme tokens (mirrors index.css :root --si-*) ---
@@ -93,6 +93,7 @@ interface AppState {
   scenarioIdx: number;
   awaitingScenarioStart: boolean;
   currentParcelId: string | null;
+  continuousMode: boolean;
   pendingFollowUp: PendingFollowUp | null;
 }
 
@@ -121,6 +122,7 @@ type Action =
   | { type: "SET_RUNNING_DEMO"; payload: boolean }
   | { type: "SET_SCENARIO_GATE"; payload: { idx: number; awaiting: boolean } }
   | { type: "SET_CURRENT_PARCEL"; payload: { parcelId: string } }
+  | { type: "SET_CONTINUOUS_MODE"; payload: boolean }
   | { type: "UPDATE_PARCELS"; payload: Parcel[] }
   | { type: "SET_PENDING_FOLLOWUP"; payload: PendingFollowUp }
   | { type: "CLEAR_PENDING_FOLLOWUP" }
@@ -173,6 +175,7 @@ const initialState: AppState = {
   scenarioIdx: -1,
   awaitingScenarioStart: false,
   currentParcelId: "P001",
+  continuousMode: false,
   pendingFollowUp: null,
 };
 
@@ -361,6 +364,8 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, isRunningDemo: action.payload };
     case "SET_SCENARIO_GATE":
       return { ...state, scenarioIdx: action.payload.idx, awaitingScenarioStart: action.payload.awaiting };
+    case "SET_CONTINUOUS_MODE":
+      return { ...state, continuousMode: action.payload };
     case "SET_CURRENT_PARCEL": {
       const target = state.parcels.find((p) => p.id === action.payload.parcelId);
       if (!target) return state;
@@ -466,7 +471,7 @@ function reducer(state: AppState, action: Action): AppState {
       };
     }
     case "RESET_DEMO":
-      return initialState;
+      return { ...initialState, continuousMode: state.continuousMode };
     default:
       return state;
   }
@@ -1334,8 +1339,67 @@ function PanelOne() {
     followUpRef.current = state.pendingFollowUp;
   }, [state.pendingFollowUp]);
 
-  const handleMicClick = async () => {
-    if (state.isListening) return;
+  const continuousModeRef = useRef(state.continuousMode);
+  useEffect(() => {
+    continuousModeRef.current = state.continuousMode;
+  }, [state.continuousMode]);
+
+  const isSpeakingRef = useRef(state.isSpeaking);
+  useEffect(() => {
+    isSpeakingRef.current = state.isSpeaking;
+  }, [state.isSpeaking]);
+
+  const sessionActiveRef = useRef(false);
+  const [sessionActive, setSessionActive] = useState(false);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const fallbackTimerRef = useRef<number | null>(null);
+
+  const setSessionActiveBoth = (v: boolean) => {
+    sessionActiveRef.current = v;
+    setSessionActive(v);
+  };
+
+  const stopSession = (logEvent = true) => {
+    const wasActive = sessionActiveRef.current;
+    setSessionActiveBoth(false);
+    if (recognitionRef.current) {
+      try { recognitionRef.current.onresult = null as unknown as SpeechRecognition["onresult"]; } catch { /* noop */ }
+      try { recognitionRef.current.onerror = null as unknown as SpeechRecognition["onerror"]; } catch { /* noop */ }
+      try { recognitionRef.current.onend = null as unknown as SpeechRecognition["onend"]; } catch { /* noop */ }
+      try { recognitionRef.current.stop(); } catch { /* noop */ }
+      recognitionRef.current = null;
+    }
+    if (fallbackTimerRef.current !== null) {
+      clearTimeout(fallbackTimerRef.current);
+      fallbackTimerRef.current = null;
+    }
+    dispatch({ type: "SET_LISTENING", payload: false });
+    if (wasActive && logEvent) {
+      dispatch({ type: "ADD_EVENT", payload: "Driver A: continuous voice session ended" });
+    }
+  };
+
+  // End any active session if the toggle is turned off mid-session.
+  useEffect(() => {
+    if (!state.continuousMode && sessionActiveRef.current) stopSession();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.continuousMode]);
+
+  // Cleanup on unmount.
+  useEffect(() => () => stopSession(false), []);
+
+  const waitWhileSpeaking = () =>
+    new Promise<void>((resolve) => {
+      if (!isSpeakingRef.current) return resolve();
+      const t = window.setInterval(() => {
+        if (!isSpeakingRef.current || !sessionActiveRef.current) {
+          window.clearInterval(t);
+          resolve();
+        }
+      }, 120);
+    });
+
+  const startRecognitionCycle = () => {
     dispatch({ type: "SET_LISTENING", payload: true });
     try {
       const SpeechRecognitionCtor =
@@ -1345,31 +1409,74 @@ function PanelOne() {
         const recognition = new SpeechRecognitionCtor();
         recognition.continuous = false;
         recognition.interimResults = false;
+        recognitionRef.current = recognition;
         recognition.onresult = async (event: SpeechRecognitionEvent) => {
           const transcript = event.results[0][0].transcript;
           dispatch({ type: "SET_TRANSCRIPT", payload: transcript });
-          await routeTranscript(transcript);
           dispatch({ type: "SET_LISTENING", payload: false });
+          await routeTranscript(transcript);
+          if (sessionActiveRef.current && continuousModeRef.current) {
+            await waitWhileSpeaking();
+            await new Promise((r) => setTimeout(r, 350));
+            if (sessionActiveRef.current && continuousModeRef.current) startRecognitionCycle();
+          }
         };
         recognition.onerror = () => {
           dispatch({ type: "SET_LISTENING", payload: false });
+          if (sessionActiveRef.current && continuousModeRef.current) {
+            window.setTimeout(() => {
+              if (sessionActiveRef.current && continuousModeRef.current) startRecognitionCycle();
+            }, 600);
+          }
+        };
+        recognition.onend = () => {
+          // If the recognizer stopped without firing a result and we're still in
+          // a session, restart after the speaking phase ends.
+          if (sessionActiveRef.current && continuousModeRef.current && recognitionRef.current === recognition) {
+            recognitionRef.current = null;
+            (async () => {
+              await waitWhileSpeaking();
+              await new Promise((r) => setTimeout(r, 250));
+              if (sessionActiveRef.current && continuousModeRef.current) startRecognitionCycle();
+            })();
+          }
         };
         recognition.start();
       } else {
-        setTimeout(async () => {
+        fallbackTimerRef.current = window.setTimeout(async () => {
+          fallbackTimerRef.current = null;
           const pending = followUpRef.current;
           let fallback: string;
           if (pending?.type === "delay_details") fallback = "about 15 minutes, heavy traffic";
           else if (pending?.type === "confirm_navigation") fallback = "yes please";
           else fallback = "I will be delayed for the next parcel";
           dispatch({ type: "SET_TRANSCRIPT", payload: fallback });
-          await routeTranscript(fallback);
           dispatch({ type: "SET_LISTENING", payload: false });
+          await routeTranscript(fallback);
+          if (sessionActiveRef.current && continuousModeRef.current) {
+            await waitWhileSpeaking();
+            await new Promise((r) => setTimeout(r, 350));
+            if (sessionActiveRef.current && continuousModeRef.current) startRecognitionCycle();
+          }
         }, 2000);
       }
     } catch {
       dispatch({ type: "SET_LISTENING", payload: false });
     }
+  };
+
+  const handleMicClick = async () => {
+    // In continuous mode, a tap during an active session ends it.
+    if (sessionActiveRef.current) {
+      stopSession();
+      return;
+    }
+    if (state.isListening) return;
+    if (state.continuousMode) {
+      setSessionActiveBoth(true);
+      dispatch({ type: "ADD_EVENT", payload: "Driver A: continuous voice session started" });
+    }
+    startRecognitionCycle();
   };
 
   const looksLikeFreshIntent = (text: string) => {
@@ -1733,6 +1840,55 @@ function PanelOne() {
 
       {/* mic + waveform */}
       <div style={{ marginTop: "auto", paddingTop: 28, display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
+        {/* Continuous-conversation toggle */}
+        <button
+          data-testid="btn-continuous-toggle"
+          onClick={() => dispatch({ type: "SET_CONTINUOUS_MODE", payload: !state.continuousMode })}
+          aria-pressed={state.continuousMode}
+          aria-label={`Continuous conversation ${state.continuousMode ? "on" : "off"}`}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "5px 10px 5px 6px",
+            borderRadius: 999,
+            background: state.continuousMode ? SI.accentWash : SI.surface,
+            border: `1px solid ${state.continuousMode ? SI.accent : SI.hair}`,
+            cursor: "pointer",
+            fontFamily: FONT_MONO,
+            fontSize: 10,
+            color: state.continuousMode ? SI.accentDeep : SI.inkSoft,
+            letterSpacing: "0.14em",
+            textTransform: "uppercase",
+            fontWeight: 700,
+          }}
+        >
+          <span
+            style={{
+              width: 26,
+              height: 14,
+              borderRadius: 999,
+              background: state.continuousMode ? SI.accentDeep : SI.hair,
+              position: "relative",
+              transition: "background .2s",
+              flexShrink: 0,
+            }}
+          >
+            <span
+              style={{
+                position: "absolute",
+                top: 2,
+                left: state.continuousMode ? 14 : 2,
+                width: 10,
+                height: 10,
+                borderRadius: "50%",
+                background: "#fff",
+                transition: "left .2s",
+              }}
+            />
+          </span>
+          <span>Continuous · {state.continuousMode ? "ON" : "OFF"}</span>
+        </button>
         <SIWave mode={mode} />
         <button
           data-testid="btn-mic"
@@ -1741,19 +1897,33 @@ function PanelOne() {
             width: 88,
             height: 88,
             borderRadius: "50%",
-            background: mode === "listening" ? SI.accentDeep : mode === "speaking" ? SI.accent : SI.surface,
-            border: `1px solid ${mode === "standby" ? SI.hair : SI.accent}`,
-            color: mode === "standby" ? SI.accentDeep : "#fff",
+            background: sessionActive
+              ? SI.rustDeep
+              : mode === "listening"
+                ? SI.accentDeep
+                : mode === "speaking"
+                  ? SI.accent
+                  : SI.surface,
+            border: `1px solid ${sessionActive ? SI.rustDeep : mode === "standby" ? SI.hair : SI.accent}`,
+            color: mode === "standby" && !sessionActive ? SI.accentDeep : "#fff",
             fontFamily: FONT_HEAD,
             fontSize: 14,
             fontStyle: "italic",
             letterSpacing: "0.04em",
             cursor: "pointer",
             transition: "all .25s",
-            boxShadow: mode !== "standby" ? `0 0 0 8px ${SI.accentWash}` : "none",
+            boxShadow: mode !== "standby" || sessionActive ? `0 0 0 8px ${SI.accentWash}` : "none",
           }}
         >
-          {mode === "listening" ? "● rec" : mode === "speaking" ? "otto" : "speak"}
+          {sessionActive
+            ? mode === "speaking"
+              ? "otto"
+              : "end"
+            : mode === "listening"
+              ? "● rec"
+              : mode === "speaking"
+                ? "otto"
+                : "speak"}
         </button>
         <div style={{ minHeight: 56, textAlign: "center", maxWidth: 320 }}>
           {state.spokenCaption ? (
