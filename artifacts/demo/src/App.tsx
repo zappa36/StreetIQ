@@ -1644,6 +1644,7 @@ function PanelOne() {
     dispatch({ type: "SET_INTENT", payload: { intent: "delay_details", entity: `+${minutes}min · ${reason}` } });
     dispatch({ type: "APPLY_DELAY", payload: { parcelId: pending.parcelId, minutes, reason } });
     dispatch({ type: "ADD_EVENT", payload: `Driver A: ${pending.parcelId} delayed +${minutes}min — ${reason}` });
+    await playTtsAlert("OK, thanks. I'll send it to the back office.");
   };
 
   const parseDelayKeywords = (text: string): { minutes: number; reason: string } => {
