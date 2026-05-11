@@ -14,9 +14,19 @@ const allowedOrigins = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(",").map((o) => o.trim())
   : [];
 
-if (isProduction && allowedOrigins.length === 0) {
-  logger.warn("CORS_ORIGINS env var is not set — cross-origin requests will be blocked in production");
-}
+// Replit-hosted domains are always trusted in addition to any explicit
+// CORS_ORIGINS. This covers both dev (*.replit.dev / *.worf.replit.dev) and
+// production deployments (*.replit.app), so the SPA artifact can call the
+// API artifact without manual env configuration.
+const REPLIT_HOST_RE = /\.(replit\.app|replit\.dev|repl\.co|worf\.replit\.dev)$/i;
+const isReplitOrigin = (origin: string): boolean => {
+  try {
+    const host = new URL(origin).hostname;
+    return REPLIT_HOST_RE.test(host);
+  } catch {
+    return false;
+  }
+};
 
 app.use(
   cors({
@@ -29,7 +39,7 @@ app.use(
         callback(null, true);
         return;
       }
-      if (allowedOrigins.includes(origin)) {
+      if (allowedOrigins.includes(origin) || isReplitOrigin(origin)) {
         callback(null, true);
       } else {
         callback(new Error("Not allowed by CORS"));
