@@ -72,6 +72,16 @@ interface DelayExtras {
   reason?: string;
 }
 
+interface BackOfficeRec {
+  id: string;
+  reason: string;
+  parcelIdsToMove: string[];
+  summary: string;
+  narration: string;
+  createdAt: string;
+  totalDelayMin: number;
+}
+
 interface AppState {
   driverAState: DriverState;
   driverBState: DriverState;
@@ -98,6 +108,11 @@ interface AppState {
   resetSignal: number;
   ttsInFlight: number;
   pendingFollowUp: PendingFollowUp | null;
+  backOfficeRecommendation: BackOfficeRec | null;
+  backOfficeNotification: boolean;
+  backOfficeIsSpeaking: boolean;
+  backOfficeIsListening: boolean;
+  backOfficeCardOpen: boolean;
 }
 
 type Action =
@@ -133,6 +148,12 @@ type Action =
   | { type: "APPLY_DELAY"; payload: { parcelId: string; minutes: number; reason: string } }
   | { type: "APPLY_AHEAD"; payload: { parcelId: string; minutes: number; reason: string } }
   | { type: "APPLY_INBOUND_SCENARIO"; payload: { scenarioId: DriverBScenarioId } }
+  | { type: "RAISE_BACK_OFFICE_REC"; payload: BackOfficeRec }
+  | { type: "CLEAR_BACK_OFFICE_REC" }
+  | { type: "APPLY_BACK_OFFICE_REC" }
+  | { type: "OPEN_BACK_OFFICE_CARD" }
+  | { type: "CLOSE_BACK_OFFICE_CARD" }
+  | { type: "SET_BACK_OFFICE_VOICE_STATE"; payload: { speaking?: boolean; listening?: boolean } }
   | { type: "RESET_DEMO" };
 
 // --- Mock Data ---
@@ -184,6 +205,11 @@ const initialState: AppState = {
   resetSignal: 0,
   ttsInFlight: 0,
   pendingFollowUp: null,
+  backOfficeRecommendation: null,
+  backOfficeNotification: false,
+  backOfficeIsSpeaking: false,
+  backOfficeIsListening: false,
+  backOfficeCardOpen: false,
 };
 
 const SCENARIOS: { id: string; title: string; description: string }[] = [
@@ -295,6 +321,35 @@ function restampDriverARoute(
     if (p.id === "P001" && opts.tagP001) tag = opts.tagP001;
     if (p.id === "P002" && opts.tagP002) tag = opts.tagP002;
     return { ...p, eta: newEta, delayReasons: [...(p.delayReasons ?? []), tag] };
+  });
+}
+
+// Re-stamp ETAs for Driver B's open route. Anchor at the earliest current
+// ETA among Driver B open stops; space them 15 min apart in route order.
+function restampDriverBRoute(parcels: Parcel[], anchorEta?: string): Parcel[] {
+  const interval = 15;
+  const bRoute = parcels.filter((p) => p.driver === "Driver B");
+  const open = bRoute.filter((p) => p.status !== "delivered" && p.status !== "rescheduled");
+  if (open.length === 0) return parcels;
+  const baseAnchor = anchorEta
+    ? timeToMin(anchorEta)
+    : Math.min(...open.map((p) => timeToMin(p.eta)));
+  const newEtaById = new Map<string, string>();
+  open.forEach((p, i) => {
+    const total = baseAnchor + i * interval;
+    const wrapped = ((total % 1440) + 1440) % 1440;
+    const h = Math.floor(wrapped / 60);
+    const m = wrapped % 60;
+    newEtaById.set(p.id, `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}`);
+  });
+  return parcels.map((p) => {
+    const newEta = newEtaById.get(p.id);
+    if (!newEta || newEta === p.eta) return p;
+    return {
+      ...p,
+      eta: newEta,
+      delayReasons: [...(p.delayReasons ?? []), `re-stamped · ETA → ${newEta}`],
+    };
   });
 }
 
@@ -589,6 +644,74 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case "TTS_IN_FLIGHT_DELTA":
       return { ...state, ttsInFlight: Math.max(0, state.ttsInFlight + action.payload) };
+    case "RAISE_BACK_OFFICE_REC":
+      // Don't overwrite an existing recommendation that hasn't been resolved.
+      if (state.backOfficeRecommendation) return state;
+      return {
+        ...state,
+        backOfficeRecommendation: action.payload,
+        backOfficeNotification: true,
+        backOfficeCardOpen: false,
+      };
+    case "CLEAR_BACK_OFFICE_REC":
+      return {
+        ...state,
+        backOfficeRecommendation: null,
+        backOfficeNotification: false,
+        backOfficeCardOpen: false,
+      };
+    case "OPEN_BACK_OFFICE_CARD":
+      return { ...state, backOfficeCardOpen: true, backOfficeNotification: false };
+    case "CLOSE_BACK_OFFICE_CARD":
+      return { ...state, backOfficeCardOpen: false };
+    case "SET_BACK_OFFICE_VOICE_STATE":
+      return {
+        ...state,
+        ...(typeof action.payload.speaking === "boolean" ? { backOfficeIsSpeaking: action.payload.speaking } : {}),
+        ...(typeof action.payload.listening === "boolean" ? { backOfficeIsListening: action.payload.listening } : {}),
+      };
+    case "APPLY_BACK_OFFICE_REC": {
+      const rec = state.backOfficeRecommendation;
+      if (!rec) return state;
+      const moveSet = new Set(rec.parcelIdsToMove);
+      // Flip selected parcels to Driver B and clear delay statuses on the moved parcels.
+      const moved = state.parcels.map((p) =>
+        moveSet.has(p.id)
+          ? {
+              ...p,
+              driver: "Driver B" as const,
+              status: "pending" as ParcelStatus,
+              delayReasons: [...(p.delayReasons ?? []), "reassigned by Back Office Otto"],
+            }
+          : p
+      );
+      // Restamp Driver A's remaining open route, then space Driver B's new
+      // route 15 min apart starting just after Driver A's earliest open ETA.
+      const restampedA = restampDriverARoute(moved, { generalTag: "re-sequenced after rebalancing" });
+      const aOpenEtas = restampedA
+        .filter((p) => p.driver === "Driver A" && p.status !== "delivered" && p.status !== "rescheduled")
+        .map((p) => p.eta);
+      const anchor = aOpenEtas.length > 0
+        ? `${Math.floor((Math.min(...aOpenEtas.map(timeToMin)) + 5) / 60).toString().padStart(2, "0")}:${(((Math.min(...aOpenEtas.map(timeToMin)) + 5) % 60)).toString().padStart(2, "0")}`
+        : undefined;
+      const restampedB = restampDriverBRoute(restampedA, anchor);
+      // Advance currentParcelId if the current one was moved off Driver A.
+      let nextCurrent = state.currentParcelId;
+      if (nextCurrent && moveSet.has(nextCurrent)) {
+        const nextOpen = restampedB.find(
+          (p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed" || p.status === "early")
+        );
+        nextCurrent = nextOpen ? nextOpen.id : null;
+      }
+      return {
+        ...state,
+        parcels: restampedB,
+        currentParcelId: nextCurrent,
+        backOfficeRecommendation: null,
+        backOfficeNotification: false,
+        backOfficeCardOpen: false,
+      };
+    }
     case "RESET_DEMO":
       return { ...initialState, continuousMode: state.continuousMode, resetSignal: state.resetSignal + 1 };
     default:
@@ -604,6 +727,10 @@ const DemoContext = createContext<{
   triggerInboundAlert: (scenarioId: DriverBScenarioId) => void;
   triggerCustomInboundAlert: (text: string) => void;
   playTtsAlert: (text: string) => void;
+  playBackOfficeTts: (text: string) => Promise<void>;
+  cancelBackOfficeTts: () => void;
+  acceptBackOfficeRec: () => void;
+  dismissBackOfficeRec: () => void;
 } | null>(null);
 
 function useDemo() {
@@ -1069,6 +1196,88 @@ export default function App() {
     }
   };
 
+  // Independent TTS channel for Back Office Otto so he can speak without
+  // colliding with in-cab Otto. Uses a different OpenAI voice ("shimmer")
+  // and tracks its own speaking state.
+  const backOfficeTtsRef = useRef<{ token: number; cancel: () => void } | null>(null);
+  const backOfficeTtsTokenRef = useRef(0);
+
+  const playBackOfficeTts = async (text: string): Promise<void> => {
+    if (backOfficeTtsRef.current) {
+      try { backOfficeTtsRef.current.cancel(); } catch { /* ignore */ }
+      backOfficeTtsRef.current = null;
+    }
+    const myToken = ++backOfficeTtsTokenRef.current;
+    const isCurrent = () => backOfficeTtsTokenRef.current === myToken;
+    const markStart = () => dispatch({ type: "SET_BACK_OFFICE_VOICE_STATE", payload: { speaking: true } });
+    const markEnd = () => dispatch({ type: "SET_BACK_OFFICE_VOICE_STATE", payload: { speaking: false } });
+    try {
+      const ttsRes = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, voice: "shimmer" }),
+      });
+      if (!isCurrent()) return;
+      if (ttsRes.ok) {
+        const blob = await ttsRes.blob();
+        if (!isCurrent()) return;
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        markStart();
+        return await new Promise<void>((resolve) => {
+          let resolved = false;
+          const done = () => {
+            if (resolved) return;
+            resolved = true;
+            if (isCurrent()) markEnd();
+            if (backOfficeTtsRef.current?.token === myToken) backOfficeTtsRef.current = null;
+            resolve();
+          };
+          backOfficeTtsRef.current = {
+            token: myToken,
+            cancel: () => {
+              try { audio.pause(); } catch { /* ignore */ }
+              try { audio.currentTime = 0; } catch { /* ignore */ }
+              done();
+            },
+          };
+          audio.onended = done;
+          audio.onerror = done;
+          audio.play().catch(done);
+        });
+      }
+    } catch {
+      /* fall through to speech synthesis */
+    }
+    if (!isCurrent()) return;
+    if ("speechSynthesis" in window) {
+      return await new Promise<void>((resolve) => {
+        let resolved = false;
+        const utt = new SpeechSynthesisUtterance(text);
+        utt.rate = 1;
+        utt.pitch = 0.9;
+        utt.onstart = markStart;
+        const done = () => {
+          if (resolved) return;
+          resolved = true;
+          if (isCurrent()) markEnd();
+          if (backOfficeTtsRef.current?.token === myToken) backOfficeTtsRef.current = null;
+          resolve();
+        };
+        utt.onend = done;
+        utt.onerror = done;
+        backOfficeTtsRef.current = {
+          token: myToken,
+          cancel: () => {
+            try { window.speechSynthesis.cancel(); } catch { /* ignore */ }
+            done();
+          },
+        };
+        window.speechSynthesis.speak(utt);
+      });
+    }
+  };
+
   const resolveDelayParcel = (ref: string | undefined): Parcel | null => {
     const aRoute = stateRef.current.parcels.filter((p) => p.driver === "Driver A");
     const aOpen = aRoute.filter((p) => p.status === "pending" || p.status === "delayed" || p.status === "early");
@@ -1212,6 +1421,99 @@ export default function App() {
       payload: { type: "inbound_alert", scenarioId, summary: sc.summary, fullMessage: sc.fullMessage, question },
     });
     playTtsAlert(`You have a new notification. Would you like to hear it?`);
+  };
+
+  // ---------------- Back Office Otto trigger + actions ----------------
+  // Idempotency guard: remember the last parcel-snapshot we already raised on
+  // so re-renders or unrelated state changes can't re-fire the effect.
+  const lastRaisedSnapshotRef = useRef<string | null>(null);
+  // Clear the idempotency key on Reset so a fresh demo run can re-trigger.
+  useEffect(() => {
+    if (state.resetSignal > 0) lastRaisedSnapshotRef.current = null;
+  }, [state.resetSignal]);
+  // Watches the parcel plan for piling delays on Driver A and raises a
+  // rebalancing recommendation when the threshold is exceeded.
+  useEffect(() => {
+    if (stateRef.current.backOfficeRecommendation) return;
+    if (state.backOfficeRecommendation) return;
+    const aOpen = state.parcels.filter(
+      (p) => p.driver === "Driver A" && p.status !== "delivered" && p.status !== "rescheduled"
+    );
+    if (aOpen.length < 2) return;
+    const totalDelayMin = aOpen.reduce((sum, p) => {
+      const diff = timeToMin(p.eta) - timeToMin(p.originalEta);
+      return sum + Math.max(0, diff);
+    }, 0);
+    const delayedCount = aOpen.filter((p) => p.status === "delayed").length;
+    const trigger = totalDelayMin >= 25 || delayedCount >= 2;
+    if (!trigger) return;
+    // Pick the latest N open parcels (preserve route order; take from the tail)
+    // and move them to Driver B. Move at most 3, at least 1, and never the
+    // current parcel the driver is actively working.
+    const movable = aOpen.filter((p) => p.id !== state.currentParcelId);
+    if (movable.length === 0) return;
+    const moveCount = Math.min(2, movable.length);
+    const toMove = movable.slice(-moveCount);
+    const moveLabels = toMove.map((p) => `${p.id} — ${p.address}`).join(" and ");
+    const summary = `Driver A is ${totalDelayMin} min behind across ${aOpen.length} stops (${delayedCount} flagged delayed). I'd move ${moveCount === 1 ? "the last stop" : `the last ${moveCount} stops`} (${moveLabels}) to Driver B so Driver A can catch up.`;
+    const narration = `Heads up — Driver A is now about ${totalDelayMin} minutes behind across ${aOpen.length} stops. I'd recommend moving ${moveLabels} over to Driver B. Want to accept?`;
+    const now = new Date();
+    const stamp = `${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}:${now.getSeconds().toString().padStart(2, "0")}`;
+    const snapshotKey = `${totalDelayMin}|${delayedCount}|${toMove.map((p) => p.id).join(",")}`;
+    if (lastRaisedSnapshotRef.current === snapshotKey) return;
+    lastRaisedSnapshotRef.current = snapshotKey;
+    const rec: BackOfficeRec = {
+      id: `bo-${Date.now()}`,
+      reason: delayedCount >= 2 ? "multiple delayed stops" : "cumulative delay over threshold",
+      parcelIdsToMove: toMove.map((p) => p.id),
+      summary,
+      narration,
+      createdAt: stamp,
+      totalDelayMin,
+    };
+    dispatch({ type: "RAISE_BACK_OFFICE_REC", payload: rec });
+    dispatch({ type: "ADD_EVENT", payload: `Back Office Otto: new rebalancing recommendation (${totalDelayMin} min behind, ${delayedCount} delayed)` });
+    // Audible notification chime via TTS in the back-office voice.
+    playBackOfficeTts("Dispatch — I have a new rebalancing recommendation for you.");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.parcels]);
+
+  const acceptBackOfficeRec = () => {
+    const rec = stateRef.current.backOfficeRecommendation;
+    if (!rec) return;
+    const moveLabels = rec.parcelIdsToMove
+      .map((id) => stateRef.current.parcels.find((p) => p.id === id))
+      .filter((p): p is Parcel => !!p)
+      .map((p) => `${p.id} — ${p.address}`)
+      .join(", ");
+    dispatch({ type: "APPLY_BACK_OFFICE_REC" });
+    dispatch({ type: "ADD_EVENT", payload: `Dispatcher accepted Back Office Otto's rebalancing → moved ${moveLabels} to Driver B` });
+    playBackOfficeTts("Done. I've moved the stops over and refreshed both routes.");
+    // Notify Driver A through the in-cab Otto voice.
+    setTimeout(() => {
+      const moveCount = rec.parcelIdsToMove.length;
+      playTtsAlert(
+        `Dispatch rebalanced your route — ${moveCount === 1 ? "one stop has" : `${moveCount} stops have`} been moved to your colleague. Your remaining ETAs are updated.`
+      );
+    }, 800);
+  };
+
+  const cancelBackOfficeTts = () => {
+    // Bump the token first so any in-flight fetch resolving after this point
+    // sees isCurrent() === false and won't start playback.
+    backOfficeTtsTokenRef.current += 1;
+    if (backOfficeTtsRef.current) {
+      try { backOfficeTtsRef.current.cancel(); } catch { /* ignore */ }
+      backOfficeTtsRef.current = null;
+    }
+    try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
+    dispatch({ type: "SET_BACK_OFFICE_VOICE_STATE", payload: { speaking: false, listening: false } });
+  };
+
+  const dismissBackOfficeRec = () => {
+    dispatch({ type: "CLEAR_BACK_OFFICE_REC" });
+    dispatch({ type: "ADD_EVENT", payload: `Dispatcher dismissed Otto's rebalancing suggestion` });
+    cancelBackOfficeTts();
   };
 
   const triggerCustomInboundAlert = (text: string) => {
@@ -1403,7 +1705,7 @@ export default function App() {
   };
 
   return (
-    <DemoContext.Provider value={{ state, dispatch, processIntent, triggerInboundAlert, triggerCustomInboundAlert, playTtsAlert }}>
+    <DemoContext.Provider value={{ state, dispatch, processIntent, triggerInboundAlert, triggerCustomInboundAlert, playTtsAlert, playBackOfficeTts, cancelBackOfficeTts, acceptBackOfficeRec, dismissBackOfficeRec }}>
       <div
         style={{
           minHeight: "100vh",
@@ -2525,6 +2827,269 @@ function PanelTwo() {
 }
 
 // ============================================================
+// BackOfficeWave — red waveform variant for Back Office Otto
+// ============================================================
+function BackOfficeWave({ mode }: { mode: "standby" | "listening" | "speaking" }) {
+  const heights = [10, 16, 22, 30, 22, 14, 24, 32, 26, 16, 10, 18, 28, 22, 14, 20, 30, 24, 16, 22, 14, 10];
+  const active = mode !== "standby";
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 3, height: 36 }}>
+      {heights.map((h, i) => (
+        <div
+          key={i}
+          style={{
+            width: 3,
+            borderRadius: 2,
+            background: SI.rustDeep,
+            height: h,
+            opacity: active ? 0.95 : 0.28,
+            animation: active ? `si-bar 0.8s ease-in-out ${i * 0.04}s infinite alternate` : "none",
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+// ============================================================
+// BackOfficeStrip — Otto's dispatcher cockpit at the top of PANEL 02
+// ============================================================
+function BackOfficeStrip() {
+  const { state, dispatch, playBackOfficeTts, cancelBackOfficeTts, acceptBackOfficeRec, dismissBackOfficeRec } = useDemo();
+  const rec = state.backOfficeRecommendation;
+  const hasRec = !!rec;
+  const cardOpen = state.backOfficeCardOpen;
+  const showBell = state.backOfficeNotification;
+  const mode: "standby" | "listening" | "speaking" = state.backOfficeIsSpeaking
+    ? "speaking"
+    : state.backOfficeIsListening
+      ? "listening"
+      : "standby";
+
+  const status = state.backOfficeIsSpeaking
+    ? "Speaking…"
+    : state.backOfficeIsListening
+      ? "Listening…"
+      : hasRec
+        ? showBell
+          ? "New recommendation available"
+          : "Recommendation ready — review below"
+        : "Idle · monitoring plan";
+
+  const handleSpeakClick = async () => {
+    if (state.backOfficeIsSpeaking) {
+      // Interrupt current narration — cancels both /api/tts audio and speechSynthesis.
+      cancelBackOfficeTts();
+      return;
+    }
+    if (hasRec) {
+      if (!cardOpen) dispatch({ type: "OPEN_BACK_OFFICE_CARD" });
+      else dispatch({ type: "OPEN_BACK_OFFICE_CARD" }); // also clears bell
+      // Brief listening flash for parity with Driver A's cockpit, then narrate.
+      dispatch({ type: "SET_BACK_OFFICE_VOICE_STATE", payload: { listening: true } });
+      setTimeout(() => {
+        dispatch({ type: "SET_BACK_OFFICE_VOICE_STATE", payload: { listening: false } });
+        playBackOfficeTts(rec!.narration);
+      }, 350);
+    } else {
+      dispatch({ type: "SET_BACK_OFFICE_VOICE_STATE", payload: { listening: true } });
+      setTimeout(() => {
+        dispatch({ type: "SET_BACK_OFFICE_VOICE_STATE", payload: { listening: false } });
+        playBackOfficeTts("Dispatch — no rebalancing needed right now. The plan looks healthy.");
+      }, 600);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        padding: "10px 14px",
+        borderBottom: `1px solid ${SI.hair}`,
+        background: hasRec ? SI.rustWash : SI.surface,
+        animation: showBell ? "si-pulse 1.8s ease-in-out infinite" : "none",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <button
+          data-testid="btn-back-office-speak"
+          onClick={handleSpeakClick}
+          aria-label="Back Office Otto speak"
+          style={{
+            position: "relative",
+            width: 44,
+            height: 44,
+            borderRadius: "50%",
+            background: mode === "standby" ? SI.surfaceUp : SI.rustWash,
+            border: `2px solid ${SI.rustDeep}`,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+            boxShadow: showBell ? `0 0 0 4px ${SI.rustWash}` : "none",
+            transition: "all .2s",
+          }}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={SI.rustDeep} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="9" y="3" width="6" height="12" rx="3" />
+            <path d="M5 11a7 7 0 0 0 14 0" />
+            <line x1="12" y1="18" x2="12" y2="22" />
+          </svg>
+          {showBell && (
+            <span
+              style={{
+                position: "absolute",
+                top: -4,
+                right: -4,
+                width: 14,
+                height: 14,
+                borderRadius: "50%",
+                background: SI.rustDeep,
+                color: "#fff",
+                fontSize: 9,
+                fontFamily: FONT_MONO,
+                fontWeight: 700,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                border: "2px solid #fff",
+                animation: "si-pulse 1.2s ease-in-out infinite",
+              }}
+            >
+              !
+            </span>
+          )}
+        </button>
+        <BackOfficeWave mode={mode} />
+        <div style={{ flex: 1, minWidth: 0, marginLeft: "auto", textAlign: "right" }}>
+          <div
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 9,
+              color: SI.rustDeep,
+              letterSpacing: "0.18em",
+              fontWeight: 700,
+              textTransform: "uppercase",
+            }}
+          >
+            Back Office Otto
+          </div>
+          <div
+            style={{
+              fontFamily: FONT_BODY,
+              fontSize: 11,
+              color: hasRec ? SI.rustDeep : SI.inkSoft,
+              fontWeight: hasRec ? 600 : 400,
+              lineHeight: 1.3,
+              marginTop: 2,
+            }}
+          >
+            {status}
+          </div>
+        </div>
+      </div>
+
+      <AnimatePresence initial={false}>
+        {hasRec && cardOpen && (
+          <motion.div
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            data-testid="back-office-rec-card"
+            style={{
+              marginTop: 10,
+              padding: "12px 14px",
+              background: SI.surfaceUp,
+              border: `1px solid ${SI.hair}`,
+              borderLeft: `4px solid ${SI.rustDeep}`,
+              borderRadius: 10,
+            }}
+          >
+            <div
+              style={{
+                fontFamily: FONT_MONO,
+                fontSize: 10,
+                color: SI.rustDeep,
+                letterSpacing: "0.18em",
+                fontWeight: 700,
+                textTransform: "uppercase",
+                marginBottom: 4,
+              }}
+            >
+              Otto · rebalancing recommendation
+            </div>
+            <div style={{ fontFamily: FONT_HEAD, fontSize: 13, color: SI.ink, lineHeight: 1.4 }}>
+              {rec!.summary}
+            </div>
+            <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 4 }}>
+              {rec!.parcelIdsToMove.map((id) => {
+                const p = state.parcels.find((x) => x.id === id);
+                if (!p) return null;
+                return (
+                  <span
+                    key={id}
+                    style={{
+                      fontFamily: FONT_MONO,
+                      fontSize: 10,
+                      color: SI.rustDeep,
+                      background: SI.rustWash,
+                      border: `1px solid ${SI.rustDeep}`,
+                      padding: "2px 6px",
+                      borderRadius: 4,
+                      letterSpacing: "0.04em",
+                    }}
+                  >
+                    {p.id} · {p.address} → Driver B
+                  </span>
+                );
+              })}
+            </div>
+            <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+              <button
+                data-testid="btn-back-office-accept"
+                onClick={acceptBackOfficeRec}
+                style={{
+                  flex: 1,
+                  fontFamily: FONT_BODY,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  background: SI.rustDeep,
+                  color: "#fff",
+                  border: "none",
+                  padding: "7px 10px",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                }}
+              >
+                Accept rebalance
+              </button>
+              <button
+                data-testid="btn-back-office-dismiss"
+                onClick={dismissBackOfficeRec}
+                style={{
+                  flex: 1,
+                  fontFamily: FONT_BODY,
+                  fontSize: 12,
+                  fontWeight: 500,
+                  background: SI.surface,
+                  color: SI.inkSoft,
+                  border: `1px solid ${SI.hair}`,
+                  padding: "7px 10px",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                }}
+              >
+                Dismiss
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ============================================================
 // Panel 03 — Dispatch (parcels + system log)
 // ============================================================
 function PanelThree() {
@@ -2720,6 +3285,7 @@ function PanelThree() {
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+      <BackOfficeStrip />
       {/* Parcels — split by driver */}
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "14px 16px" }}>
         {driverHeader("Driver A", driverASections.length, SI.accentDeep, SI.accentWash)}
