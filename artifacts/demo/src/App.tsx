@@ -64,7 +64,7 @@ type PendingFollowUp =
   | { type: "delay_details"; parcelId: string; parcelLabel: string; question: string; knownMinutes: number | null; knownReason: string | null }
   | { type: "ahead_details"; parcelId: string; parcelLabel: string; question: string; knownMinutes: number | null; knownReason: string | null }
   | { type: "confirm_navigation"; question: string; contextLabel: string }
-  | { type: "inbound_alert"; scenarioId: DriverBScenarioId; summary: string; fullMessage: string; question: string };
+  | { type: "inbound_alert"; scenarioId: DriverBScenarioId | null; summary: string; fullMessage: string; question: string };
 
 interface DelayExtras {
   parcelRef?: string;
@@ -602,6 +602,7 @@ const DemoContext = createContext<{
   dispatch: React.Dispatch<Action>;
   processIntent: (intent: string, entity: string, extras?: DelayExtras) => void;
   triggerInboundAlert: (scenarioId: DriverBScenarioId) => void;
+  triggerCustomInboundAlert: (text: string) => void;
   playTtsAlert: (text: string) => void;
 } | null>(null);
 
@@ -1211,6 +1212,21 @@ export default function App() {
     playTtsAlert(`You have a new notification from Driver B. Would you like to hear it?`);
   };
 
+  const triggerCustomInboundAlert = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const summary = trimmed.length > 60 ? `${trimmed.slice(0, 57)}…` : trimmed;
+    const fullMessage = `Driver B says: ${trimmed}`;
+    const question = "New custom message from Driver B. Would you like to hear it?";
+    dispatch({ type: "ADD_EVENT", payload: `Driver B → Dispatch: ${summary}` });
+    dispatch({ type: "ADD_EVENT", payload: `StreetIQ → Driver A: relaying custom alert (awaiting yes/no)` });
+    dispatch({
+      type: "SET_PENDING_FOLLOWUP",
+      payload: { type: "inbound_alert", scenarioId: null, summary, fullMessage, question },
+    });
+    playTtsAlert("You have a new message from Driver B. Would you like to hear it?");
+  };
+
   const demoRunIdRef = useRef(0);
   const waitResolversRef = useRef<Array<() => void>>([]);
 
@@ -1385,7 +1401,7 @@ export default function App() {
   };
 
   return (
-    <DemoContext.Provider value={{ state, dispatch, processIntent, triggerInboundAlert, playTtsAlert }}>
+    <DemoContext.Provider value={{ state, dispatch, processIntent, triggerInboundAlert, triggerCustomInboundAlert, playTtsAlert }}>
       <div
         style={{
           minHeight: "100vh",
@@ -1516,10 +1532,12 @@ function PanelOne() {
 
   const playInboundTts = (text: string) => playTtsAlert(text);
 
-  const acceptInboundAlert = (alert: { scenarioId: DriverBScenarioId; summary: string; fullMessage: string }) => {
-    dispatch({ type: "SET_INTENT", payload: { intent: "confirm_yes", entity: alert.scenarioId } });
+  const acceptInboundAlert = (alert: { scenarioId: DriverBScenarioId | null; summary: string; fullMessage: string }) => {
+    dispatch({ type: "SET_INTENT", payload: { intent: "confirm_yes", entity: alert.scenarioId ?? "custom" } });
     dispatch({ type: "ADD_EVENT", payload: `Driver A: accepted alert "${alert.summary}"` });
-    dispatch({ type: "APPLY_INBOUND_SCENARIO", payload: { scenarioId: alert.scenarioId } });
+    if (alert.scenarioId) {
+      dispatch({ type: "APPLY_INBOUND_SCENARIO", payload: { scenarioId: alert.scenarioId } });
+    }
     dispatch({ type: "ADD_EVENT", payload: `StreetIQ → Driver A: ${alert.fullMessage}` });
     dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
     playInboundTts(alert.fullMessage);
@@ -1757,7 +1775,7 @@ function PanelOne() {
     return null;
   };
 
-  const handleInboundAnswer = (text: string, alert: { scenarioId: DriverBScenarioId; summary: string; fullMessage: string }) => {
+  const handleInboundAnswer = (text: string, alert: { scenarioId: DriverBScenarioId | null; summary: string; fullMessage: string }) => {
     const ans = parseYesNo(text);
     if (ans === "yes") acceptInboundAlert(alert);
     else if (ans === "no") declineInboundAlert(alert);
@@ -2782,8 +2800,14 @@ function SystemLog() {
 // Panel 04 — Proactive Copilot (Driver B → Driver A scenario triggers)
 // ============================================================
 function PanelFour() {
-  const { state, dispatch, triggerInboundAlert } = useDemo();
+  const { state, dispatch, triggerInboundAlert, triggerCustomInboundAlert } = useDemo();
+  const [customMsg, setCustomMsg] = useState("");
   const pendingAlert = state.pendingFollowUp?.type === "inbound_alert" ? state.pendingFollowUp : null;
+  const sendCustom = () => {
+    if (!customMsg.trim() || pendingAlert) return;
+    triggerCustomInboundAlert(customMsg);
+    setCustomMsg("");
+  };
   const showProactiveCard = state.driverBAlertVisible;
   const acceptedReroute = state.driverBRerouteAccepted === true;
 
@@ -2913,6 +2937,77 @@ function PanelFour() {
         </div>
       )}
 
+
+      {/* Custom Driver B message — ad-hoc inbound alert */}
+      <div
+        style={{
+          marginTop: 12,
+          marginBottom: 12,
+          padding: "10px 12px",
+          background: SI.surfaceUp,
+          border: `1px solid ${SI.hair}`,
+          borderRadius: 10,
+        }}
+      >
+        <div
+          style={{
+            fontFamily: FONT_MONO,
+            fontSize: 10,
+            color: SI.ink2Deep,
+            letterSpacing: "0.18em",
+            fontWeight: 700,
+            marginBottom: 6,
+          }}
+        >
+          CUSTOM MESSAGE FROM DRIVER B
+        </div>
+        <textarea
+          value={customMsg}
+          onChange={(e) => setCustomMsg(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              sendCustom();
+            }
+          }}
+          placeholder="Type a message Driver B is sending to Driver A…"
+          disabled={!!pendingAlert}
+          rows={2}
+          style={{
+            width: "100%",
+            boxSizing: "border-box",
+            fontFamily: FONT_BODY,
+            fontSize: 12,
+            color: SI.ink,
+            background: SI.surface,
+            border: `1px solid ${SI.hair}`,
+            borderRadius: 6,
+            padding: "6px 8px",
+            resize: "vertical",
+            outline: "none",
+          }}
+        />
+        <div style={{ marginTop: 6, display: "flex", justifyContent: "flex-end" }}>
+          <button
+            onClick={sendCustom}
+            disabled={!customMsg.trim() || !!pendingAlert}
+            data-testid="btn-driver-b-custom"
+            style={{
+              fontFamily: FONT_BODY,
+              fontSize: 12,
+              fontWeight: 600,
+              background: customMsg.trim() && !pendingAlert ? SI.ink2Deep : SI.hair,
+              color: customMsg.trim() && !pendingAlert ? "#fff" : SI.inkFaint,
+              border: "none",
+              padding: "6px 12px",
+              borderRadius: 6,
+              cursor: customMsg.trim() && !pendingAlert ? "pointer" : "not-allowed",
+            }}
+          >
+            Send to Driver A
+          </button>
+        </div>
+      </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {(Object.entries(DRIVER_B_SCENARIOS) as [DriverBScenarioId, typeof DRIVER_B_SCENARIOS[DriverBScenarioId]][]).map(([id, sc]) => {
