@@ -262,6 +262,42 @@ function addMinutes(timeStr: string, mins: number): string {
   return `${newH.toString().padStart(2, "0")}:${newM.toString().padStart(2, "0")}`;
 }
 
+function timeToMin(t: string): number {
+  const [h, m] = t.split(":").map(Number);
+  return h * 60 + m;
+}
+
+// Re-stamp ETAs for the OPEN portion of Driver A's route after a re-sequence.
+// Anchors at the earliest current ETA among open (non-delivered, non-rescheduled)
+// Driver A stops, then spaces them 15 minutes apart in their new order. Stops
+// with status "rescheduled" or "delivered" keep their existing ETA.
+function restampDriverARoute(
+  parcels: Parcel[],
+  opts: { tagP001?: string; tagP002?: string; generalTag?: string; intervalMin?: number } = {}
+): Parcel[] {
+  const interval = opts.intervalMin ?? 15;
+  const aRoute = parcels.filter((p) => p.driver === "Driver A");
+  const open = aRoute.filter((p) => p.status !== "delivered" && p.status !== "rescheduled");
+  if (open.length === 0) return parcels;
+  const anchor = Math.min(...open.map((p) => timeToMin(p.eta)));
+  const newEtaById = new Map<string, string>();
+  open.forEach((p, i) => {
+    const total = anchor + i * interval;
+    const wrapped = ((total % 1440) + 1440) % 1440;
+    const h = Math.floor(wrapped / 60);
+    const m = wrapped % 60;
+    newEtaById.set(p.id, `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}`);
+  });
+  return parcels.map((p) => {
+    const newEta = newEtaById.get(p.id);
+    if (!newEta || newEta === p.eta) return p;
+    let tag = opts.generalTag ?? `re-sequenced · ETA → ${newEta}`;
+    if (p.id === "P001" && opts.tagP001) tag = opts.tagP001;
+    if (p.id === "P002" && opts.tagP002) tag = opts.tagP002;
+    return { ...p, eta: newEta, delayReasons: [...(p.delayReasons ?? []), tag] };
+  });
+}
+
 // --- Reducer ---
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
@@ -426,22 +462,35 @@ function reducer(state: AppState, action: Action): AppState {
         };
       }
       if (sid === "oak_traffic") {
+        // Re-sequence: head to P002 first, then come back to P001. Re-stamp
+        // ETAs for the whole open Driver A route so each delivery reflects
+        // the new visit order.
         const next = [...state.parcels];
         const i1 = next.findIndex((p) => p.id === "P001");
         const i2 = next.findIndex((p) => p.id === "P002");
         if (i1 >= 0 && i2 >= 0) [next[i1], next[i2]] = [next[i2], next[i1]];
-        return { ...state, parcels: next };
+        const restamped = restampDriverARoute(next, {
+          tagP002: "re-sequenced · head here first",
+          tagP001: "re-sequenced · visit after P002 (Oak St traffic)",
+        });
+        return { ...state, parcels: restamped };
       }
       if (sid === "customer_unavailable") {
+        // P001 moves to the end of the route as a "rescheduled" stop at 17:00.
+        // The rest of the open Driver A route shifts forward — re-stamp ETAs
+        // so customers see their new (earlier) delivery windows.
         const aParcels = state.parcels.filter((p) => p.driver === "Driver A");
         const others = state.parcels.filter((p) => p.driver !== "Driver A");
         const reordered = [
           ...aParcels.filter((p) => p.id !== "P001"),
           ...aParcels
             .filter((p) => p.id === "P001")
-            .map((p) => ({ ...p, status: "rescheduled" as ParcelStatus, eta: "17:00", delayReasons: [...(p.delayReasons ?? []), "rescheduled · customer not home"] })),
+            .map((p) => ({ ...p, status: "rescheduled" as ParcelStatus, eta: "17:00", delayReasons: [...(p.delayReasons ?? []), "rescheduled · customer not home (17:00)"] })),
         ];
-        return { ...state, parcels: [...reordered, ...others] };
+        const restamped = restampDriverARoute([...reordered, ...others], {
+          generalTag: "shifted earlier · P001 rescheduled",
+        });
+        return { ...state, parcels: restamped };
       }
       if (sid === "parking_tip") {
         return {
@@ -452,13 +501,29 @@ function reducer(state: AppState, action: Action): AppState {
         };
       }
       if (sid === "oak_accident") {
+        // +15min on P001, cascade to every open Driver A parcel after it.
+        const aOrder = state.parcels.filter((p) => p.driver === "Driver A").map((p) => p.id);
+        const targetIdx = aOrder.indexOf("P001");
+        const cascadeIds = new Set(targetIdx >= 0 ? aOrder.slice(targetIdx) : []);
         return {
           ...state,
-          parcels: state.parcels.map((p) =>
-            p.id === "P001"
-              ? { ...p, status: "delayed" as ParcelStatus, eta: addMinutes(p.eta, 15), delayReasons: [...(p.delayReasons ?? []), "+15min · accident on Oak St"] }
-              : p
-          ),
+          parcels: state.parcels.map((p) => {
+            if (!cascadeIds.has(p.id)) return p;
+            if (p.status === "delivered" || p.status === "rescheduled") return p;
+            if (p.id === "P001") {
+              return {
+                ...p,
+                status: "delayed" as ParcelStatus,
+                eta: addMinutes(p.eta, 15),
+                delayReasons: [...(p.delayReasons ?? []), "+15min · accident on Oak St"],
+              };
+            }
+            return {
+              ...p,
+              eta: addMinutes(p.eta, 15),
+              delayReasons: [...(p.delayReasons ?? []), "+15min · cascading from P001"],
+            };
+          }),
         };
       }
       return state;
