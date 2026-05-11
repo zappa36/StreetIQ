@@ -138,9 +138,9 @@ const INITIAL_PARCELS: Parcel[] = [
   { id: "P001", address: "12 Oak St", customer: "Alice Chen", driver: "Driver A", eta: "14:20", originalEta: "14:20", status: "pending", delayReasons: [] },
   { id: "P002", address: "34 Maple Ave", customer: "Bob Torres", driver: "Driver A", eta: "14:35", originalEta: "14:35", status: "pending", delayReasons: [] },
   { id: "P003", address: "56 Pine Rd", customer: "Carol Wu", driver: "Driver A", eta: "14:50", originalEta: "14:50", status: "pending", delayReasons: [] },
-  { id: "P004", address: "78 Maple St", customer: "David Kim", driver: "Driver B", eta: "14:25", originalEta: "14:25", status: "pending", delayReasons: [] },
-  { id: "P005", address: "91 Elm Blvd", customer: "Emma Park", driver: "Driver B", eta: "14:40", originalEta: "14:40", status: "pending", delayReasons: [] },
-  { id: "P006", address: "103 Cedar Ln", customer: "Frank Li", driver: "Driver B", eta: "14:55", originalEta: "14:55", status: "pending", delayReasons: [] },
+  { id: "P004", address: "78 Maple St", customer: "David Kim", driver: "Driver A", eta: "15:05", originalEta: "15:05", status: "pending", delayReasons: [] },
+  { id: "P005", address: "91 Elm Blvd", customer: "Emma Park", driver: "Driver A", eta: "15:20", originalEta: "15:20", status: "pending", delayReasons: [] },
+  { id: "P006", address: "103 Cedar Ln", customer: "Frank Li", driver: "Driver A", eta: "15:35", originalEta: "15:35", status: "pending", delayReasons: [] },
 ];
 
 const INITIAL_SPOTS: ParkingSpot[] = [
@@ -160,7 +160,7 @@ const initialState: AppState = {
   driverAState: "Driving",
   driverBState: "Driving",
   parcels: INITIAL_PARCELS,
-  events: [{ id: "e-init", timestamp: "14:18:02", message: "Route 04 dispatched · 6 stops · Driver A + B" }],
+  events: [{ id: "e-init", timestamp: "14:18:02", message: "Route 04 dispatched · 6 stops · Driver A" }],
   mapVisible: false,
   mapOpening: false,
   roadClosed: false,
@@ -1353,7 +1353,7 @@ export default function App() {
               <PanelTwo />
             </PanelShell>
           )}
-          <PanelShell index="02" title="Dispatch" sub="6 stops · 2 drivers" tone="rust" bg={SI.bg}>
+          <PanelShell index="02" title="Dispatch" sub="6 stops · Driver A" tone="rust" bg={SI.bg}>
             <PanelThree />
           </PanelShell>
           <PanelShell index="03" title="Driver B Quick Actions" sub="Driver B → A" tone="ink2" bg={SI.bgDeep}>
@@ -2314,6 +2314,7 @@ function PanelThree() {
 
   const driverASections = state.parcels.filter((p) => p.driver === "Driver A");
   const driverBSections = state.parcels.filter((p) => p.driver === "Driver B");
+  const showDriverBSection = driverBSections.length > 0;
 
   const renderHeader = () => (
     <thead>
@@ -2482,11 +2483,15 @@ function PanelThree() {
           {renderHeader()}
           <tbody>{driverASections.map(renderRow)}</tbody>
         </table>
-        {driverHeader("Driver B", driverBSections.length, SI.ink2Deep, SI.ink2Wash)}
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          {renderHeader()}
-          <tbody>{driverBSections.map(renderRow)}</tbody>
-        </table>
+        {showDriverBSection && (
+          <>
+            {driverHeader("Driver B", driverBSections.length, SI.ink2Deep, SI.ink2Wash)}
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              {renderHeader()}
+              <tbody>{driverBSections.map(renderRow)}</tbody>
+            </table>
+          </>
+        )}
       </div>
 
       {/* System log strip */}
