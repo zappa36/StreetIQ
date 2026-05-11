@@ -2972,9 +2972,10 @@ function BackOfficeStrip() {
               <rect x="6" y="6" width="12" height="12" rx="1.5" />
             </svg>
           ) : (
-            // Play (triangle) icon
-            <svg width="16" height="16" viewBox="0 0 24 24" fill={SI.rustDeep}>
-              <path d="M7 5l12 7-12 7V5z" />
+            // AI sparkle icon
+            <svg width="20" height="20" viewBox="0 0 24 24" fill={SI.rustDeep}>
+              <path d="M12 2.5l1.7 4.8 4.8 1.7-4.8 1.7L12 15.5l-1.7-4.8L5.5 9l4.8-1.7L12 2.5z" />
+              <path d="M18.5 14l.9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9.9-2.6z" />
             </svg>
           )}
           {showBell && !state.backOfficeIsSpeaking && (
