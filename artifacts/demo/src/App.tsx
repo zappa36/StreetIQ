@@ -401,13 +401,28 @@ function reducer(state: AppState, action: Action): AppState {
     case "APPLY_INBOUND_SCENARIO": {
       const sid = action.payload.scenarioId;
       if (sid === "maple_closed") {
+        const aOrder = state.parcels.filter((p) => p.driver === "Driver A").map((p) => p.id);
+        const targetIdx = aOrder.indexOf("P002");
+        const cascadeIds = new Set(targetIdx >= 0 ? aOrder.slice(targetIdx) : []);
         return {
           ...state,
-          parcels: state.parcels.map((p) =>
-            p.id === "P002"
-              ? { ...p, status: "delayed" as ParcelStatus, eta: addMinutes(p.eta, 10), delayReasons: [...(p.delayReasons ?? []), "+10min · Maple Ave closed"] }
-              : p
-          ),
+          parcels: state.parcels.map((p) => {
+            if (!cascadeIds.has(p.id)) return p;
+            if (p.status === "delivered") return p;
+            if (p.id === "P002") {
+              return {
+                ...p,
+                status: "delayed" as ParcelStatus,
+                eta: addMinutes(p.eta, 10),
+                delayReasons: [...(p.delayReasons ?? []), "+10min · Maple Ave closed"],
+              };
+            }
+            return {
+              ...p,
+              eta: addMinutes(p.eta, 10),
+              delayReasons: [...(p.delayReasons ?? []), "+10min · cascading from P002"],
+            };
+          }),
         };
       }
       if (sid === "oak_traffic") {
