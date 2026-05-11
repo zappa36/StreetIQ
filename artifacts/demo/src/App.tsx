@@ -2824,14 +2824,84 @@ function SystemLog() {
 // Panel 04 — Proactive Copilot (Driver B → Driver A scenario triggers)
 // ============================================================
 function PanelFour() {
-  const { state, dispatch, triggerInboundAlert, triggerCustomInboundAlert } = useDemo();
+  const { state, dispatch, processIntent, triggerInboundAlert } = useDemo();
   const [customMsg, setCustomMsg] = useState("");
+  const [clarification, setClarification] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const pendingAlert = state.pendingFollowUp?.type === "inbound_alert" ? state.pendingFollowUp : null;
-  const sendCustom = () => {
-    if (!customMsg.trim() || pendingAlert) return;
-    triggerCustomInboundAlert(customMsg);
+
+  // Clear any clarification hint when the user starts editing again.
+  useEffect(() => {
+    if (clarification) setClarification(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customMsg]);
+
+  const sendCustom = async () => {
+    if (!customMsg.trim() || pendingAlert || busy) return;
+    const text = customMsg.trim();
+    setBusy(true);
+    setClarification(null);
+
+    let data:
+      | { intent?: string; entity?: string; parcelRef?: string; minutes?: number; reason?: string; confidence?: number }
+      | null = null;
+    try {
+      const res = await fetch("/api/classify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transcript: text }),
+      });
+      if (res.ok) data = await res.json();
+    } catch {
+      /* network error */
+    }
+    setBusy(false);
+
+    if (!data) {
+      setClarification("Couldn't reach Otto. Please try again.");
+      return;
+    }
+
+    const conf = typeof data.confidence === "number" ? data.confidence : 1;
+
+    // Unclear → ask Driver B for more detail inline (don't bother Driver A yet).
+    if (!data.intent || data.intent === "general" || conf < 0.5) {
+      setClarification(
+        "I'm not sure what to do with that. Mention which delivery (parcel number or street) and what's happening — for example: closed, delayed by 15 min, parking, ahead, or delivered."
+      );
+      return;
+    }
+
+    // Need-more-info checks for delay / ahead reports.
+    if (data.intent === "delay_reported" || data.intent === "ahead_reported") {
+      const hasRef = typeof data.parcelRef === "string" && data.parcelRef.trim().length > 0;
+      const hasMins = typeof data.minutes === "number";
+      const hasReason = typeof data.reason === "string" && data.reason.length > 0;
+      if (!hasRef) {
+        setClarification("Which delivery? Mention the parcel number, the street, or say 'next'.");
+        return;
+      }
+      if (!hasMins) {
+        setClarification("How many minutes? Add a duration like '15 minutes' or 'half an hour'.");
+        return;
+      }
+      if (!hasReason) {
+        setClarification(data.intent === "delay_reported" ? "What's the cause of the delay?" : "What's helping you run ahead?");
+        return;
+      }
+    }
+
+    // Clear, actionable message → log it from Driver B, apply to Panel 02 plan,
+    // and have Otto narrate the change to Driver A.
+    dispatch({ type: "ADD_EVENT", payload: `Driver B → Dispatch: ${text}` });
+    const extras: DelayExtras = {};
+    if (typeof data.parcelRef === "string") extras.parcelRef = data.parcelRef;
+    if (typeof data.minutes === "number") extras.minutes = data.minutes;
+    if (typeof data.reason === "string" && data.reason.length > 0) extras.reason = data.reason;
+    processIntent(data.intent, data.entity ?? "", extras);
     setCustomMsg("");
   };
+
   const showProactiveCard = state.driverBAlertVisible;
   const acceptedReroute = state.driverBRerouteAccepted === true;
 
@@ -2995,7 +3065,7 @@ function PanelFour() {
             }
           }}
           placeholder="Type a message to back office…"
-          disabled={!!pendingAlert}
+          disabled={!!pendingAlert || busy}
           rows={2}
           style={{
             width: "100%",
@@ -3004,31 +3074,50 @@ function PanelFour() {
             fontSize: 12,
             color: SI.ink,
             background: SI.surface,
-            border: `1px solid ${SI.hair}`,
+            border: `1px solid ${clarification ? SI.amberDeep : SI.hair}`,
             borderRadius: 6,
             padding: "6px 8px",
             resize: "vertical",
             outline: "none",
           }}
         />
+        {clarification && (
+          <div
+            data-testid="driver-b-clarification"
+            style={{
+              marginTop: 6,
+              padding: "6px 8px",
+              background: SI.amberWash,
+              border: `1px solid ${SI.amberDeep}`,
+              borderRadius: 6,
+              fontFamily: FONT_BODY,
+              fontSize: 11,
+              color: SI.amberDeep,
+              lineHeight: 1.4,
+            }}
+          >
+            <span style={{ fontWeight: 700, marginRight: 4 }}>Otto:</span>
+            {clarification}
+          </div>
+        )}
         <div style={{ marginTop: 6, display: "flex", justifyContent: "flex-end" }}>
           <button
             onClick={sendCustom}
-            disabled={!customMsg.trim() || !!pendingAlert}
+            disabled={!customMsg.trim() || !!pendingAlert || busy}
             data-testid="btn-driver-b-custom"
             style={{
               fontFamily: FONT_BODY,
               fontSize: 12,
               fontWeight: 600,
-              background: customMsg.trim() && !pendingAlert ? SI.ink2Deep : SI.hair,
-              color: customMsg.trim() && !pendingAlert ? "#fff" : SI.inkFaint,
+              background: customMsg.trim() && !pendingAlert && !busy ? SI.ink2Deep : SI.hair,
+              color: customMsg.trim() && !pendingAlert && !busy ? "#fff" : SI.inkFaint,
               border: "none",
               padding: "6px 12px",
               borderRadius: 6,
-              cursor: customMsg.trim() && !pendingAlert ? "pointer" : "not-allowed",
+              cursor: customMsg.trim() && !pendingAlert && !busy ? "pointer" : "not-allowed",
             }}
           >
-            Send
+            {busy ? "Thinking…" : "Send"}
           </button>
         </div>
       </div>
