@@ -95,6 +95,7 @@ interface AppState {
   currentParcelId: string | null;
   continuousMode: boolean;
   resetSignal: number;
+  ttsInFlight: number;
   pendingFollowUp: PendingFollowUp | null;
 }
 
@@ -119,6 +120,7 @@ type Action =
   | { type: "SET_INTENT"; payload: { intent: string; entity: string } }
   | { type: "SET_LISTENING"; payload: boolean }
   | { type: "SET_SPEAKING"; payload: boolean }
+  | { type: "TTS_IN_FLIGHT_DELTA"; payload: number }
   | { type: "SET_SPOKEN_CAPTION"; payload: string }
   | { type: "SET_RUNNING_DEMO"; payload: boolean }
   | { type: "SET_SCENARIO_GATE"; payload: { idx: number; awaiting: boolean } }
@@ -178,6 +180,7 @@ const initialState: AppState = {
   currentParcelId: "P001",
   continuousMode: false,
   resetSignal: 0,
+  ttsInFlight: 0,
   pendingFollowUp: null,
 };
 
@@ -472,6 +475,8 @@ function reducer(state: AppState, action: Action): AppState {
         }),
       };
     }
+    case "TTS_IN_FLIGHT_DELTA":
+      return { ...state, ttsInFlight: Math.max(0, state.ttsInFlight + action.payload) };
     case "RESET_DEMO":
       return { ...initialState, continuousMode: state.continuousMode, resetSignal: state.resetSignal + 1 };
     default:
@@ -857,48 +862,57 @@ export default function App() {
   }, [state.driverAState]);
 
   const playTtsAlert = async (text: string): Promise<void> => {
+    // Track every TTS turn from invocation through completion so the
+    // continuous-mode recognizer can wait for the whole turn — including the
+    // async fetch latency before isSpeaking flips true.
+    dispatch({ type: "TTS_IN_FLIGHT_DELTA", payload: 1 });
     const markStart = () => {
       dispatch({ type: "SET_SPOKEN_CAPTION", payload: text });
       dispatch({ type: "SET_SPEAKING", payload: true });
     };
     const markEnd = () => dispatch({ type: "SET_SPEAKING", payload: false });
+    const finish = () => dispatch({ type: "TTS_IN_FLIGHT_DELTA", payload: -1 });
     try {
-      const ttsRes = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, voice: "nova" }),
-      });
-      if (ttsRes.ok) {
-        const blob = await ttsRes.blob();
-        const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        markStart();
+      try {
+        const ttsRes = await fetch("/api/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text, voice: "nova" }),
+        });
+        if (ttsRes.ok) {
+          const blob = await ttsRes.blob();
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          markStart();
+          return await new Promise<void>((resolve) => {
+            const done = () => {
+              markEnd();
+              resolve();
+            };
+            audio.onended = done;
+            audio.onerror = done;
+            audio.play().catch(done);
+          });
+        }
+      } catch {
+        /* fall through */
+      }
+      if ("speechSynthesis" in window) {
         return await new Promise<void>((resolve) => {
+          const utt = new SpeechSynthesisUtterance(text);
+          utt.rate = 1;
+          utt.onstart = markStart;
           const done = () => {
             markEnd();
             resolve();
           };
-          audio.onended = done;
-          audio.onerror = done;
-          audio.play().catch(done);
+          utt.onend = done;
+          utt.onerror = done;
+          window.speechSynthesis.speak(utt);
         });
       }
-    } catch {
-      /* fall through */
-    }
-    if ("speechSynthesis" in window) {
-      return await new Promise<void>((resolve) => {
-        const utt = new SpeechSynthesisUtterance(text);
-        utt.rate = 1;
-        utt.onstart = markStart;
-        const done = () => {
-          markEnd();
-          resolve();
-        };
-        utt.onend = done;
-        utt.onerror = done;
-        window.speechSynthesis.speak(utt);
-      });
+    } finally {
+      finish();
     }
   };
 
@@ -1351,6 +1365,11 @@ function PanelOne() {
     isSpeakingRef.current = state.isSpeaking;
   }, [state.isSpeaking]);
 
+  const ttsInFlightRef = useRef(state.ttsInFlight);
+  useEffect(() => {
+    ttsInFlightRef.current = state.ttsInFlight;
+  }, [state.ttsInFlight]);
+
   const sessionActiveRef = useRef(false);
   const [sessionActive, setSessionActive] = useState(false);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
@@ -1403,15 +1422,24 @@ function PanelOne() {
   // Cleanup on unmount.
   useEffect(() => () => stopSession(false), []);
 
+  // Wait until Otto has nothing in-flight or actively speaking. We give a
+  // brief grace window so a TTS turn that was just dispatched (fetch still
+  // resolving, isSpeaking not yet true) is observed before we return.
   const waitWhileSpeaking = () =>
     new Promise<void>((resolve) => {
-      if (!isSpeakingRef.current) return resolve();
-      const t = window.setInterval(() => {
-        if (!isSpeakingRef.current || !sessionActiveRef.current) {
-          window.clearInterval(t);
-          resolve();
-        }
-      }, 120);
+      const isBusy = () => isSpeakingRef.current || ttsInFlightRef.current > 0;
+      const startedAt = Date.now();
+      const graceMs = 250;
+      const tick = () => {
+        if (!sessionActiveRef.current) return resolve();
+        if (isBusy()) return; // interval keeps polling
+        // Not busy — but if we're still inside the grace window and nothing
+        // has registered yet, keep waiting briefly for an in-flight TTS.
+        if (Date.now() - startedAt < graceMs) return;
+        window.clearInterval(t);
+        resolve();
+      };
+      const t = window.setInterval(tick, 60);
     });
 
   const startRecognitionCycle = () => {
