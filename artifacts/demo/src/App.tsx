@@ -1487,8 +1487,7 @@ export default function App() {
     };
     dispatch({ type: "RAISE_BACK_OFFICE_REC", payload: rec });
     dispatch({ type: "ADD_EVENT", payload: `Back Office Otto: new rebalancing recommendation (${totalDelayMin} min behind, ${delayedCount} delayed)` });
-    // Audible notification chime via TTS in the back-office voice.
-    playBackOfficeTts("Dispatch — I have a new rebalancing recommendation for you.");
+    // Note: Otto stays silent until the dispatcher presses the play button.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.parcels]);
 
@@ -2890,28 +2889,31 @@ function BackOfficeStrip() {
           : "Recommendation ready — review below"
         : "Idle · monitoring plan";
 
-  const handleSpeakClick = async () => {
+  const handlePlayClick = async () => {
     if (state.backOfficeIsSpeaking) {
       // Interrupt current narration — cancels both /api/tts audio and speechSynthesis.
       cancelBackOfficeTts();
       return;
     }
     if (hasRec) {
-      if (!cardOpen) dispatch({ type: "OPEN_BACK_OFFICE_CARD" });
-      else dispatch({ type: "OPEN_BACK_OFFICE_CARD" }); // also clears bell
-      // Brief listening flash for parity with Driver A's cockpit, then narrate.
-      dispatch({ type: "SET_BACK_OFFICE_VOICE_STATE", payload: { listening: true } });
-      setTimeout(() => {
-        dispatch({ type: "SET_BACK_OFFICE_VOICE_STATE", payload: { listening: false } });
-        playBackOfficeTts(rec!.narration);
-      }, 350);
+      dispatch({ type: "OPEN_BACK_OFFICE_CARD" }); // opens card and clears bell
+      playBackOfficeTts(rec!.narration);
     } else {
-      dispatch({ type: "SET_BACK_OFFICE_VOICE_STATE", payload: { listening: true } });
-      setTimeout(() => {
-        dispatch({ type: "SET_BACK_OFFICE_VOICE_STATE", payload: { listening: false } });
-        playBackOfficeTts("Dispatch — no rebalancing needed right now. The plan looks healthy.");
-      }, 600);
+      playBackOfficeTts("Dispatch — no rebalancing needed right now. The plan looks healthy.");
     }
+  };
+
+  const handleMicClick = () => {
+    if (state.backOfficeIsListening) {
+      dispatch({ type: "SET_BACK_OFFICE_VOICE_STATE", payload: { listening: false } });
+      return;
+    }
+    // Mic is a placeholder for future press-to-talk; flash listening state
+    // and acknowledge so the dispatcher gets feedback.
+    dispatch({ type: "SET_BACK_OFFICE_VOICE_STATE", payload: { listening: true } });
+    setTimeout(() => {
+      dispatch({ type: "SET_BACK_OFFICE_VOICE_STATE", payload: { listening: false } });
+    }, 1200);
   };
 
   return (
@@ -2920,20 +2922,20 @@ function BackOfficeStrip() {
         padding: "10px 14px",
         borderBottom: `1px solid ${SI.hair}`,
         background: hasRec ? SI.rustWash : SI.surface,
-        animation: showBell ? "si-pulse 1.8s ease-in-out infinite" : "none",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        {/* PLAY button — bell badge appears when there's a fresh recommendation */}
         <button
-          data-testid="btn-back-office-speak"
-          onClick={handleSpeakClick}
-          aria-label="Back Office Otto speak"
+          data-testid="btn-back-office-play"
+          onClick={handlePlayClick}
+          aria-label={state.backOfficeIsSpeaking ? "Stop Back Office Otto" : "Play Back Office Otto"}
           style={{
             position: "relative",
             width: 44,
             height: 44,
             borderRadius: "50%",
-            background: mode === "standby" ? SI.surfaceUp : SI.rustWash,
+            background: state.backOfficeIsSpeaking ? SI.rustDeep : showBell ? SI.rustWash : SI.surfaceUp,
             border: `2px solid ${SI.rustDeep}`,
             cursor: "pointer",
             display: "flex",
@@ -2941,15 +2943,22 @@ function BackOfficeStrip() {
             justifyContent: "center",
             flexShrink: 0,
             boxShadow: showBell ? `0 0 0 4px ${SI.rustWash}` : "none",
+            animation: showBell ? "si-pulse 1.6s ease-in-out infinite" : "none",
             transition: "all .2s",
           }}
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={SI.rustDeep} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="9" y="3" width="6" height="12" rx="3" />
-            <path d="M5 11a7 7 0 0 0 14 0" />
-            <line x1="12" y1="18" x2="12" y2="22" />
-          </svg>
-          {showBell && (
+          {state.backOfficeIsSpeaking ? (
+            // Stop (square) icon
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="#fff">
+              <rect x="6" y="6" width="12" height="12" rx="1.5" />
+            </svg>
+          ) : (
+            // Play (triangle) icon
+            <svg width="16" height="16" viewBox="0 0 24 24" fill={SI.rustDeep}>
+              <path d="M7 5l12 7-12 7V5z" />
+            </svg>
+          )}
+          {showBell && !state.backOfficeIsSpeaking && (
             <span
               style={{
                 position: "absolute",
@@ -2973,6 +2982,31 @@ function BackOfficeStrip() {
               !
             </span>
           )}
+        </button>
+        {/* MIC button — separate input channel */}
+        <button
+          data-testid="btn-back-office-mic"
+          onClick={handleMicClick}
+          aria-label="Back Office Otto microphone"
+          style={{
+            width: 44,
+            height: 44,
+            borderRadius: "50%",
+            background: state.backOfficeIsListening ? SI.rustWash : SI.surfaceUp,
+            border: `2px solid ${SI.rustDeep}`,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+            transition: "all .2s",
+          }}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={SI.rustDeep} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="9" y="3" width="6" height="12" rx="3" />
+            <path d="M5 11a7 7 0 0 0 14 0" />
+            <line x1="12" y1="18" x2="12" y2="22" />
+          </svg>
         </button>
         <BackOfficeWave mode={mode} />
         <div style={{ flex: 1, minWidth: 0, marginLeft: "auto", textAlign: "right" }}>
