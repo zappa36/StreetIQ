@@ -1431,7 +1431,10 @@ function PanelOne() {
       const startedAt = Date.now();
       const graceMs = 250;
       const tick = () => {
-        if (!sessionActiveRef.current) return resolve();
+        if (!sessionActiveRef.current) {
+          window.clearInterval(t);
+          return resolve();
+        }
         if (isBusy()) return; // interval keeps polling
         // Not busy — but if we're still inside the grace window and nothing
         // has registered yet, keep waiting briefly for an in-flight TTS.
