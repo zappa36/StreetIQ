@@ -94,6 +94,7 @@ interface AppState {
   awaitingScenarioStart: boolean;
   currentParcelId: string | null;
   continuousMode: boolean;
+  resetSignal: number;
   pendingFollowUp: PendingFollowUp | null;
 }
 
@@ -176,6 +177,7 @@ const initialState: AppState = {
   awaitingScenarioStart: false,
   currentParcelId: "P001",
   continuousMode: false,
+  resetSignal: 0,
   pendingFollowUp: null,
 };
 
@@ -471,7 +473,7 @@ function reducer(state: AppState, action: Action): AppState {
       };
     }
     case "RESET_DEMO":
-      return { ...initialState, continuousMode: state.continuousMode };
+      return { ...initialState, continuousMode: state.continuousMode, resetSignal: state.resetSignal + 1 };
     default:
       return state;
   }
@@ -1364,10 +1366,15 @@ function PanelOne() {
     const wasActive = sessionActiveRef.current;
     setSessionActiveBoth(false);
     if (recognitionRef.current) {
-      try { recognitionRef.current.onresult = null as unknown as SpeechRecognition["onresult"]; } catch { /* noop */ }
-      try { recognitionRef.current.onerror = null as unknown as SpeechRecognition["onerror"]; } catch { /* noop */ }
-      try { recognitionRef.current.onend = null as unknown as SpeechRecognition["onend"]; } catch { /* noop */ }
-      try { recognitionRef.current.stop(); } catch { /* noop */ }
+      const r = recognitionRef.current;
+      r.onresult = null;
+      r.onerror = null;
+      r.onend = null;
+      try {
+        r.stop();
+      } catch {
+        // recognition may already be stopped — safe to ignore
+      }
       recognitionRef.current = null;
     }
     if (fallbackTimerRef.current !== null) {
@@ -1386,6 +1393,12 @@ function PanelOne() {
     if (!state.continuousMode && sessionActiveRef.current) stopSession();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.continuousMode]);
+
+  // End any active session when the user hits Reset.
+  useEffect(() => {
+    if (state.resetSignal > 0 && sessionActiveRef.current) stopSession();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.resetSignal]);
 
   // Cleanup on unmount.
   useEffect(() => () => stopSession(false), []);
@@ -1663,7 +1676,13 @@ function PanelOne() {
   const aParcel =
     state.parcels.find((p) => p.id === state.currentParcelId) ??
     state.parcels.find((p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed"));
-  const mode: "standby" | "listening" | "speaking" = state.isListening ? "listening" : state.isSpeaking ? "speaking" : "standby";
+  // While a continuous session is active, keep the "listening" affordance
+  // between turns so the waveform doesn't drop to standby during restart gaps.
+  const mode: "standby" | "listening" | "speaking" = state.isSpeaking
+    ? "speaking"
+    : state.isListening || sessionActive
+      ? "listening"
+      : "standby";
   const stateColor = state.driverAState === "Driving" ? SI.accent : state.driverAState === "Approaching" ? SI.amber : SI.accentDeep;
 
   return (
