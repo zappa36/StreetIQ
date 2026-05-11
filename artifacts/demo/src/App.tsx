@@ -1491,7 +1491,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.parcels]);
 
-  const acceptBackOfficeRec = () => {
+  const acceptBackOfficeRec = async () => {
     const rec = stateRef.current.backOfficeRecommendation;
     if (!rec) return;
     const moveLabels = rec.parcelIdsToMove
@@ -1499,16 +1499,23 @@ export default function App() {
       .filter((p): p is Parcel => !!p)
       .map((p) => `${p.id} — ${p.address}`)
       .join(", ");
+    const moveCount = rec.parcelIdsToMove.length;
     dispatch({ type: "APPLY_BACK_OFFICE_REC" });
     dispatch({ type: "ADD_EVENT", payload: `Dispatcher accepted Back Office Otto's rebalancing → moved ${moveLabels} to Driver B` });
-    playBackOfficeTts("Done. I've moved the stops over and refreshed both routes.");
-    // Notify Driver A through the in-cab Otto voice.
-    setTimeout(() => {
-      const moveCount = rec.parcelIdsToMove.length;
-      playTtsAlert(
-        `Dispatch rebalanced your route — ${moveCount === 1 ? "one stop has" : `${moveCount} stops have`} been moved to your colleague. Your remaining ETAs are updated.`
-      );
-    }, 800);
+    // 1) Back office Otto speaks first — wait for it to finish before driver Otto chimes in.
+    await playBackOfficeTts("Done. I've moved the stops over and refreshed both routes.");
+    // 2) Driver Otto then queues an inbound notification using the standard
+    //    "you have a new notification, do you want to hear it?" pattern — the
+    //    full rebalance message is delivered only after the driver answers yes.
+    const summary = `dispatch rebalance — ${moveCount === 1 ? "1 stop" : `${moveCount} stops`} moved to your colleague`;
+    const fullMessage = `Dispatch rebalanced your route — ${moveCount === 1 ? "one stop has" : `${moveCount} stops have`} been moved to your colleague. Your remaining ETAs are updated.`;
+    const question = "New notification from dispatch. Would you like to hear it?";
+    dispatch({ type: "ADD_EVENT", payload: `StreetIQ → Driver A: relaying rebalance alert (awaiting yes/no)` });
+    dispatch({
+      type: "SET_PENDING_FOLLOWUP",
+      payload: { type: "inbound_alert", scenarioId: null, summary, fullMessage, question },
+    });
+    playTtsAlert("You have a new notification. Would you like to hear it?");
   };
 
   const cancelBackOfficeTts = () => {
