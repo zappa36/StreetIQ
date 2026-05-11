@@ -688,12 +688,11 @@ function reducer(state: AppState, action: Action): AppState {
       // Restamp Driver A's remaining open route, then space Driver B's new
       // route 15 min apart starting just after Driver A's earliest open ETA.
       const restampedA = restampDriverARoute(moved, { generalTag: "re-sequenced after rebalancing" });
-      const aOpenEtas = restampedA
-        .filter((p) => p.driver === "Driver A" && p.status !== "delivered" && p.status !== "rescheduled")
-        .map((p) => p.eta);
-      const anchor = aOpenEtas.length > 0
-        ? `${Math.floor((Math.min(...aOpenEtas.map(timeToMin)) + 5) / 60).toString().padStart(2, "0")}:${(((Math.min(...aOpenEtas.map(timeToMin)) + 5) % 60)).toString().padStart(2, "0")}`
-        : undefined;
+      // Anchor Driver B's restamped route at "now + 5 min" off the wall clock,
+      // so re-stamped ETAs reflect live timing (not stale plan times).
+      const nowDate = new Date();
+      const anchorMin = (nowDate.getHours() * 60 + nowDate.getMinutes() + 5) % 1440;
+      const anchor = `${Math.floor(anchorMin / 60).toString().padStart(2, "0")}:${(anchorMin % 60).toString().padStart(2, "0")}`;
       const restampedB = restampDriverBRoute(restampedA, anchor);
       // Advance currentParcelId if the current one was moved off Driver A.
       let nextCurrent = state.currentParcelId;
@@ -777,6 +776,7 @@ function PanelShell({
   tone = "accent",
   bg,
   children,
+  highlight = false,
 }: {
   index: string;
   title: string;
@@ -784,6 +784,7 @@ function PanelShell({
   tone?: "accent" | "amber" | "rust" | "ink2";
   bg: string;
   children: React.ReactNode;
+  highlight?: boolean;
 }) {
   const accent =
     tone === "amber" ? SI.amberDeep : tone === "rust" ? SI.rustDeep : tone === "ink2" ? SI.ink2Deep : SI.accentDeep;
@@ -809,9 +810,12 @@ function PanelShell({
           gap: 10,
           position: "relative",
           minHeight: 54,
+          background: highlight ? SI.rustWash : "transparent",
+          animation: highlight ? "si-pulse 1.6s ease-in-out infinite" : "none",
+          transition: "background 0.3s ease",
         }}
       >
-        <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: accent }} />
+        <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: highlight ? 5 : 3, background: accent }} />
         {index && (
           <span
             style={{
@@ -1445,7 +1449,12 @@ export default function App() {
       return sum + Math.max(0, diff);
     }, 0);
     const delayedCount = aOpen.filter((p) => p.status === "delayed").length;
-    const trigger = totalDelayMin >= 25 || delayedCount >= 2;
+    // Hard-cutoff trigger: any single parcel slipping ≥15 min past its
+    // original committed window counts as a customer-window breach.
+    const hardCutoffBreach = aOpen.find(
+      (p) => timeToMin(p.eta) - timeToMin(p.originalEta) >= 15
+    );
+    const trigger = totalDelayMin >= 25 || delayedCount >= 2 || !!hardCutoffBreach;
     if (!trigger) return;
     // Pick the latest N open parcels (preserve route order; take from the tail)
     // and move them to Driver B. Move at most 3, at least 1, and never the
@@ -1459,12 +1468,17 @@ export default function App() {
     const narration = `Heads up — Driver A is now about ${totalDelayMin} minutes behind across ${aOpen.length} stops. I'd recommend moving ${moveLabels} over to Driver B. Want to accept?`;
     const now = new Date();
     const stamp = `${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}:${now.getSeconds().toString().padStart(2, "0")}`;
-    const snapshotKey = `${totalDelayMin}|${delayedCount}|${toMove.map((p) => p.id).join(",")}`;
+    const snapshotKey = `${totalDelayMin}|${delayedCount}|${hardCutoffBreach?.id ?? ""}|${toMove.map((p) => p.id).join(",")}`;
     if (lastRaisedSnapshotRef.current === snapshotKey) return;
     lastRaisedSnapshotRef.current = snapshotKey;
+    const reason = hardCutoffBreach
+      ? `customer window breach on ${hardCutoffBreach.id}`
+      : delayedCount >= 2
+        ? "multiple delayed stops"
+        : "cumulative delay over threshold";
     const rec: BackOfficeRec = {
       id: `bo-${Date.now()}`,
-      reason: delayedCount >= 2 ? "multiple delayed stops" : "cumulative delay over threshold",
+      reason,
       parcelIdsToMove: toMove.map((p) => p.id),
       summary,
       narration,
@@ -1814,7 +1828,7 @@ export default function App() {
               <PanelTwo />
             </PanelShell>
           )}
-          <PanelShell index="02" title="Dispatch" sub="6 stops · Driver A" tone="rust" bg={SI.bg}>
+          <PanelShell index="02" title="Dispatch" sub="6 stops · Driver A" tone="rust" bg={SI.bg} highlight={state.backOfficeNotification}>
             <PanelThree />
           </PanelShell>
           <PanelShell index="03" title="Driver B Quick Actions" sub="Driver B → A" tone="ink2" bg={SI.bgDeep}>
