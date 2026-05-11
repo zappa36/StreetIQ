@@ -448,11 +448,11 @@ function reducer(state: AppState, action: Action): AppState {
     case "APPLY_DELAY": {
       const target = state.parcels.find((p) => p.id === action.payload.parcelId);
       if (!target) return state;
-      // Find Driver A parcels in route order; cascade the delay to every Driver A
-      // parcel at or after the target's index whose status isn't already delivered.
-      const aOrder = state.parcels.filter((p) => p.driver === target.driver).map((p) => p.id);
-      const targetIdx = aOrder.indexOf(target.id);
-      const cascadeIds = new Set(aOrder.slice(targetIdx));
+      // Cascade the delay to every parcel at or after the target's index in
+      // the overall route (across both drivers) whose status isn't delivered.
+      const order = state.parcels.map((p) => p.id);
+      const targetIdx = order.indexOf(target.id);
+      const cascadeIds = new Set(order.slice(targetIdx));
       return {
         ...state,
         pendingFollowUp: null,
