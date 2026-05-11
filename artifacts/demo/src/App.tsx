@@ -1211,7 +1211,7 @@ export default function App() {
       type: "SET_PENDING_FOLLOWUP",
       payload: { type: "inbound_alert", scenarioId, summary: sc.summary, fullMessage: sc.fullMessage, question },
     });
-    playTtsAlert(`You have a new notification from Driver B. Would you like to hear it?`);
+    playTtsAlert(`You have a new notification. Would you like to hear it?`);
   };
 
   const triggerCustomInboundAlert = (text: string) => {
