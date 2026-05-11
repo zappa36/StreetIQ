@@ -1457,7 +1457,7 @@ export default function App() {
     const trigger = totalDelayMin >= 25 || delayedCount >= 2 || !!hardCutoffBreach;
     if (!trigger) return;
     // Pick the latest N open parcels (preserve route order; take from the tail)
-    // and move them to Driver B. Move at most 3, at least 1, and never the
+    // and move them to Driver B. Move at most 2, at least 1, and never the
     // current parcel the driver is actively working.
     const movable = aOpen.filter((p) => p.id !== state.currentParcelId);
     if (movable.length === 0) return;
