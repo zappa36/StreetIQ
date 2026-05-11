@@ -34,7 +34,7 @@ Intents:
 
 For BOTH delay_reported AND ahead_reported intents, also extract:
 - parcelRef: which parcel the message refers to. Use the literal string the driver said: "next" (default if they say "next parcel/stop/delivery"), an ordinal/number like "1", "2", "3" (if they say "delivery 3", "the second one", "stop number 2"), a parcel id like "P003" (if they say it), a street name (if they reference an address), or empty string if unclear.
-- minutes: estimated delta in whole positive minutes (integer) IF the driver mentioned a duration (e.g., "15 minutes" → 15, "an hour" → 60, "half an hour" → 30). Always positive — the intent type indicates direction. Omit or set to null if not mentioned.
+- minutes: the EXACT positive integer the driver said, in minutes. Do NOT round to 5 or 10. If they said "7 minutes" return 7, "12 minutes" return 12, "an hour" → 60, "half an hour" → 30. Always positive — the intent type indicates direction. Omit or set to null ONLY if no duration was mentioned at all.
 - reason: short human-readable phrase for the cause (e.g., "heavy traffic", "flat tire", "light traffic", "quick stops") IF the driver gave a reason. Omit or set to null if not mentioned.
 
 Respond ONLY with a JSON object in this exact format (no markdown, no explanation). Include parcelRef/minutes/reason ONLY for delay_reported or ahead_reported intent:
@@ -50,7 +50,7 @@ Respond ONLY with a JSON object in this exact format (no markdown, no explanatio
 const DELAY_DETAILS_PROMPT = `You are extracting delay details from a delivery driver's spoken follow-up answer. The driver was just asked: "How long will the delay be, and what happened?".
 
 From the driver's reply, extract:
-- minutes: estimated delay in whole minutes (integer). If they say "an hour" use 60. If unclear, default to 10.
+- minutes: the EXACT positive integer the driver said. Do NOT round to 5 or 10. "7 minutes" → 7, "12 minutes" → 12, "an hour" → 60, "half an hour" → 30. If they did not state a duration, set minutes to null (do NOT guess).
 - reason: a short human-readable phrase describing the cause (e.g., "heavy traffic", "flat tire", "long customer interaction"). If no reason given, use "unspecified".
 
 Respond ONLY with a JSON object in this exact format (no markdown, no explanation):
@@ -75,7 +75,7 @@ router.post("/classify", async (req, res) => {
 
   if (!anthropic) {
     if (mode === "delay_details") {
-      res.status(503).json({ error: "AI service unavailable", minutes: 10, reason: "unspecified", confidence: 0 });
+      res.status(503).json({ error: "AI service unavailable", minutes: null, reason: "unspecified", confidence: 0 });
     } else {
       res.status(503).json({ error: "AI service unavailable", intent: "general", entity: "", confidence: 0 });
     }
@@ -99,13 +99,15 @@ router.post("/classify", async (req, res) => {
     const parsed = JSON.parse(text);
 
     if (mode === "delay_details") {
-      const minutes = Number.isFinite(parsed.minutes) ? Math.max(1, Math.round(parsed.minutes)) : 10;
+      // Preserve the model's exact value. If it didn't return one, return null
+      // so the client can re-ask the driver instead of silently using 10.
+      const minutes = Number.isFinite(parsed.minutes) ? Math.max(1, Math.round(parsed.minutes)) : null;
       const out = {
         minutes,
         reason: typeof parsed.reason === "string" && parsed.reason.length > 0 ? parsed.reason : "unspecified",
         confidence: parsed.confidence ?? 0.8,
       };
-      logger.info({ tag: "classify.out", mode: "delay_details", latencyMs: Date.now() - startedAt, confidence: out.confidence }, "↩ classify response");
+      logger.info({ tag: "classify.out", mode: "delay_details", latencyMs: Date.now() - startedAt, minutes: out.minutes, reason: out.reason, confidence: out.confidence }, "↩ classify response");
       res.json(out);
     } else {
       const intent = parsed.intent ?? "general";
@@ -119,13 +121,13 @@ router.post("/classify", async (req, res) => {
         if (Number.isFinite(parsed.minutes)) out.minutes = Math.max(1, Math.round(parsed.minutes));
         if (typeof parsed.reason === "string" && parsed.reason.length > 0) out.reason = parsed.reason;
       }
-      logger.info({ tag: "classify.out", mode: "intent", latencyMs: Date.now() - startedAt, intent: out.intent, confidence: out.confidence }, "↩ classify response");
+      logger.info({ tag: "classify.out", mode: "intent", latencyMs: Date.now() - startedAt, intent: out.intent, minutes: out.minutes, reason: out.reason, confidence: out.confidence }, "↩ classify response");
       res.json(out);
     }
   } catch (err) {
     logger.error({ tag: "classify.err", mode, err: (err as Error).message }, "Classify error");
     if (mode === "delay_details") {
-      res.status(500).json({ error: "Classification failed", minutes: 10, reason: "unspecified", confidence: 0 });
+      res.status(500).json({ error: "Classification failed", minutes: null, reason: "unspecified", confidence: 0 });
     } else {
       res.status(500).json({ error: "Classification failed", intent: "general", entity: "", confidence: 0 });
     }

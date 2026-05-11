@@ -2141,7 +2141,7 @@ function PanelOne() {
   };
 
   const handleDelayDetails = async (text: string, pending: Extract<PendingFollowUp, { type: "delay_details" }>) => {
-    let minutes = pending.knownMinutes ?? 10;
+    let minutes: number | null = pending.knownMinutes ?? null;
     let reason = pending.knownReason ?? "unspecified";
     // Only treat the AI/keyword duration as authoritative when the driver's
     // follow-up actually mentions a duration — otherwise we'd clobber the
@@ -2178,6 +2178,16 @@ function PanelOne() {
       else if (lower.includes("park")) reason = "parking trouble";
       else if (text.trim().length > 0) reason = text.trim().slice(0, 60);
     }
+    // If we still don't know the duration, re-ask instead of guessing 10.
+    if (minutes === null) {
+      dispatch({
+        type: "SET_PENDING_FOLLOWUP",
+        payload: { type: "delay_details", parcelId: pending.parcelId, parcelLabel: pending.parcelLabel, question: `How many minutes will ${pending.parcelLabel} be delayed?`, knownMinutes: null, knownReason: reason !== "unspecified" ? reason : null },
+      });
+      dispatch({ type: "ADD_EVENT", payload: `Otto: re-asking — duration not captured for ${pending.parcelId}` });
+      await playTtsAlert(`I didn't catch the number of minutes — how long will ${pending.parcelLabel} be delayed?`);
+      return;
+    }
     dispatch({ type: "SET_INTENT", payload: { intent: "delay_details", entity: `+${minutes}min · ${reason}` } });
     dispatch({ type: "APPLY_DELAY", payload: { parcelId: pending.parcelId, minutes, reason } });
     dispatch({ type: "ADD_EVENT", payload: `Driver A: ${pending.parcelId} delayed +${minutes}min — ${reason}` });
@@ -2185,7 +2195,7 @@ function PanelOne() {
   };
 
   const handleAheadDetails = async (text: string, pending: Extract<PendingFollowUp, { type: "ahead_details" }>) => {
-    let minutes = pending.knownMinutes ?? 10;
+    let minutes: number | null = pending.knownMinutes ?? null;
     let reason = pending.knownReason ?? "running ahead";
     const mentionsDuration = /\b(\d+|an|a|half|one|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty|forty|fifty|sixty)\s*(?:minute|min|hour|hr)\b/i.test(text)
       || /\bhalf an hour\b/i.test(text);
@@ -2215,6 +2225,15 @@ function PanelOne() {
       else if (lower.includes("quick") || lower.includes("fast")) reason = "quick stops";
       else if (lower.includes("shortcut")) reason = "took a shortcut";
       else if (text.trim().length > 0 && reason === "unspecified") reason = text.trim().slice(0, 60);
+    }
+    if (minutes === null) {
+      dispatch({
+        type: "SET_PENDING_FOLLOWUP",
+        payload: { type: "ahead_details", parcelId: pending.parcelId, parcelLabel: pending.parcelLabel, question: `How many minutes ahead are you on ${pending.parcelLabel}?`, knownMinutes: null, knownReason: reason !== "running ahead" && reason !== "unspecified" ? reason : null },
+      });
+      dispatch({ type: "ADD_EVENT", payload: `Otto: re-asking — duration not captured for ${pending.parcelId}` });
+      await playTtsAlert(`I didn't catch the number of minutes — how far ahead are you on ${pending.parcelLabel}?`);
+      return;
     }
     dispatch({ type: "SET_INTENT", payload: { intent: "ahead_details", entity: `−${minutes}min · ${reason}` } });
     dispatch({ type: "APPLY_AHEAD", payload: { parcelId: pending.parcelId, minutes, reason } });
