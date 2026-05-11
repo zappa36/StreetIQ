@@ -8,6 +8,10 @@ import { requireApiKey } from "./middlewares/apiKey";
 
 const app: Express = express();
 
+// Replit deployments sit behind a reverse proxy that sets X-Forwarded-For;
+// trust the first hop so express-rate-limit can identify clients correctly.
+app.set("trust proxy", 1);
+
 const isProduction = process.env.NODE_ENV === "production";
 
 const allowedOrigins = process.env.CORS_ORIGINS

@@ -6,7 +6,7 @@ const isProduction = process.env.NODE_ENV === "production";
 
 if (!API_KEY) {
   if (isProduction) {
-    logger.error("API_KEY env var is not set — AI endpoints will reject all requests in production");
+    logger.warn("API_KEY env var is not set — AI endpoints will rely on CORS + rate limiting only");
   } else {
     logger.warn("API_KEY env var is not set — AI endpoints are unprotected (development only)");
   }
@@ -14,10 +14,6 @@ if (!API_KEY) {
 
 export function requireApiKey(req: Request, res: Response, next: NextFunction): void {
   if (!API_KEY) {
-    if (isProduction) {
-      res.status(503).json({ error: "Service misconfigured: authentication not available" });
-      return;
-    }
     next();
     return;
   }
