@@ -31,7 +31,7 @@ const FONT_MONO = "'JetBrains Mono', ui-monospace, 'Menlo', monospace";
 
 // --- Types ---
 type DriverState = "Driving" | "Approaching" | "Parked";
-type ParcelStatus = "pending" | "in_transit" | "delivered" | "rescheduled" | "delayed" | "failed";
+type ParcelStatus = "pending" | "in_transit" | "delivered" | "rescheduled" | "delayed" | "early" | "failed";
 
 interface Parcel {
   id: string;
@@ -62,6 +62,7 @@ type DriverBScenarioId = "maple_closed" | "oak_traffic" | "customer_unavailable"
 
 type PendingFollowUp =
   | { type: "delay_details"; parcelId: string; parcelLabel: string; question: string; knownMinutes: number | null; knownReason: string | null }
+  | { type: "ahead_details"; parcelId: string; parcelLabel: string; question: string; knownMinutes: number | null; knownReason: string | null }
   | { type: "confirm_navigation"; question: string; contextLabel: string }
   | { type: "inbound_alert"; scenarioId: DriverBScenarioId; summary: string; fullMessage: string; question: string };
 
@@ -130,6 +131,7 @@ type Action =
   | { type: "SET_PENDING_FOLLOWUP"; payload: PendingFollowUp }
   | { type: "CLEAR_PENDING_FOLLOWUP" }
   | { type: "APPLY_DELAY"; payload: { parcelId: string; minutes: number; reason: string } }
+  | { type: "APPLY_AHEAD"; payload: { parcelId: string; minutes: number; reason: string } }
   | { type: "APPLY_INBOUND_SCENARIO"; payload: { scenarioId: DriverBScenarioId } }
   | { type: "RESET_DEMO" };
 
@@ -253,8 +255,9 @@ const DRIVER_B_SCENARIOS: Record<DriverBScenarioId, {
 // --- Helper ---
 function addMinutes(timeStr: string, mins: number): string {
   const [h, m] = timeStr.split(":").map(Number);
-  const total = h * 60 + m + mins;
-  const newH = Math.floor(total / 60) % 24;
+  let total = h * 60 + m + mins;
+  total = ((total % 1440) + 1440) % 1440;
+  const newH = Math.floor(total / 60);
   const newM = total % 60;
   return `${newH.toString().padStart(2, "0")}:${newM.toString().padStart(2, "0")}`;
 }
@@ -330,7 +333,7 @@ function reducer(state: AppState, action: Action): AppState {
       let nextCurrent = state.currentParcelId;
       if (state.currentParcelId === action.payload.parcelId) {
         const nextOpen = updatedParcels.find(
-          (p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed")
+          (p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed" || p.status === "early")
         );
         nextCurrent = nextOpen ? nextOpen.id : null;
       }
@@ -471,6 +474,35 @@ function reducer(state: AppState, action: Action): AppState {
             ...p,
             eta: addMinutes(p.eta, action.payload.minutes),
             delayReasons: [...(p.delayReasons ?? []), `+${action.payload.minutes}min · cascading from ${target.id}`],
+          };
+        }),
+      };
+    }
+    case "APPLY_AHEAD": {
+      const target = state.parcels.find((p) => p.id === action.payload.parcelId);
+      if (!target) return state;
+      const aOrder = state.parcels.filter((p) => p.driver === target.driver).map((p) => p.id);
+      const targetIdx = aOrder.indexOf(target.id);
+      const cascadeIds = new Set(aOrder.slice(targetIdx));
+      const mins = action.payload.minutes;
+      return {
+        ...state,
+        pendingFollowUp: null,
+        parcels: state.parcels.map((p) => {
+          if (!cascadeIds.has(p.id)) return p;
+          if (p.status === "delivered") return p;
+          if (p.id === action.payload.parcelId) {
+            return {
+              ...p,
+              status: "early" as ParcelStatus,
+              eta: addMinutes(p.eta, -mins),
+              delayReasons: [...(p.delayReasons ?? []), `−${mins}min · ${action.payload.reason}`],
+            };
+          }
+          return {
+            ...p,
+            eta: addMinutes(p.eta, -mins),
+            delayReasons: [...(p.delayReasons ?? []), `−${mins}min · cascading from ${target.id}`],
           };
         }),
       };
@@ -817,7 +849,7 @@ export default function App() {
       const nextStop =
         stateRef.current.parcels.find((p) => p.id === stateRef.current.currentParcelId) ??
         stateRef.current.parcels.find(
-          (p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed")
+          (p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed" || p.status === "early")
         );
       const where = nextStop ? `to ${nextStop.address}` : "your next stop";
       const question = `You're getting close ${where}. Want me to open the navigation app and show some parking hotspots nearby?`;
@@ -840,10 +872,10 @@ export default function App() {
     ) {
       const target =
         stateRef.current.parcels.find(
-          (p) => p.id === stateRef.current.currentParcelId && (p.status === "pending" || p.status === "delayed")
+          (p) => p.id === stateRef.current.currentParcelId && (p.status === "pending" || p.status === "delayed" || p.status === "early")
         ) ??
         stateRef.current.parcels.find(
-          (p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed")
+          (p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed" || p.status === "early")
         );
       if (target) {
         dispatch({ type: "COMPLETE_PARCEL", payload: { parcelId: target.id } });
@@ -958,7 +990,7 @@ export default function App() {
 
   const resolveDelayParcel = (ref: string | undefined): Parcel | null => {
     const aRoute = stateRef.current.parcels.filter((p) => p.driver === "Driver A");
-    const aOpen = aRoute.filter((p) => p.status === "pending" || p.status === "delayed");
+    const aOpen = aRoute.filter((p) => p.status === "pending" || p.status === "delayed" || p.status === "early");
     if (aRoute.length === 0) return null;
     const isAtStop = stateRef.current.driverAState === "Parked" || stateRef.current.driverAState === "Approaching";
     const cleaned = (ref ?? "").toLowerCase().trim();
@@ -1055,6 +1087,35 @@ export default function App() {
       } else {
         dispatch({ type: "ADD_EVENT", payload: `Driver A: delay_reported but no matching parcel found` });
       }
+    } else if (intent === "ahead_reported") {
+      const target = resolveDelayParcel(extras.parcelRef);
+      if (target) {
+        const label = `${target.id} — ${target.address} (${target.customer})`;
+        if (typeof extras.minutes === "number" && extras.reason) {
+          dispatch({ type: "APPLY_AHEAD", payload: { parcelId: target.id, minutes: extras.minutes, reason: extras.reason } });
+          dispatch({ type: "SET_INTENT", payload: { intent: "ahead_reported", entity: `${target.id} −${extras.minutes}min · ${extras.reason}` } });
+          dispatch({ type: "ADD_EVENT", payload: `Driver A: ${target.id} ahead −${extras.minutes}min — ${extras.reason}` });
+          playTtsAlert(`Nice. ${target.id} on ${target.address} pulled forward ${extras.minutes} minutes — ${extras.reason}.`);
+        } else {
+          const missing: string[] = [];
+          if (typeof extras.minutes !== "number") missing.push("how many minutes");
+          if (!extras.reason) missing.push("how come");
+          const question =
+            missing.length === 2
+              ? "How many minutes ahead are you, and how come?"
+              : missing[0] === "how many minutes"
+                ? "How many minutes ahead are you?"
+                : "How come?";
+          dispatch({
+            type: "SET_PENDING_FOLLOWUP",
+            payload: { type: "ahead_details", parcelId: target.id, parcelLabel: label, question, knownMinutes: extras.minutes ?? null, knownReason: extras.reason ?? null },
+          });
+          dispatch({ type: "ADD_EVENT", payload: `Driver A: ahead_reported for ${target.id} (${target.address})` });
+          playTtsAlert(`Nice. For ${target.address}, ${question}`);
+        }
+      } else {
+        dispatch({ type: "ADD_EVENT", payload: `Driver A: ahead_reported but no matching parcel found` });
+      }
     }
   };
 
@@ -1098,7 +1159,7 @@ export default function App() {
     if (cancelled(runId)) return;
     const cur =
       stateRef.current.parcels.find((p) => p.id === stateRef.current.currentParcelId) ??
-      stateRef.current.parcels.find((p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed"));
+      stateRef.current.parcels.find((p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed" || p.status === "early"));
     const addr = cur?.address ?? "your next stop";
     const id = cur?.id ?? "next";
     dispatch({ type: "SET_DRIVER_A_STATE", payload: "Approaching" });
@@ -1134,7 +1195,7 @@ export default function App() {
     if (cancelled(runId)) return;
     const target =
       stateRef.current.parcels.find((p) => p.id === stateRef.current.currentParcelId)
-      ?? stateRef.current.parcels.find((p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed"))
+      ?? stateRef.current.parcels.find((p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed" || p.status === "early"))
       ?? stateRef.current.parcels.find((p) => p.driver === "Driver A");
     if (!target) return;
 
@@ -1567,6 +1628,7 @@ function PanelOne() {
           const pending = followUpRef.current;
           let fallback: string;
           if (pending?.type === "delay_details") fallback = "about 15 minutes, heavy traffic";
+          else if (pending?.type === "ahead_details") fallback = "about 10 minutes, light traffic";
           else if (pending?.type === "confirm_navigation") fallback = "yes please";
           else fallback = "I will be delayed for the next parcel";
           dispatch({ type: "SET_TRANSCRIPT", payload: fallback });
@@ -1626,6 +1688,8 @@ function PanelOne() {
     const pending = followUpRef.current;
     if (pending && pending.type === "delay_details" && !looksLikeFreshIntent(text)) {
       await handleDelayDetails(text, pending);
+    } else if (pending && pending.type === "ahead_details" && !looksLikeFreshIntent(text)) {
+      await handleAheadDetails(text, pending);
     } else if (pending && pending.type === "confirm_navigation" && !looksLikeFreshIntent(text)) {
       handleNavigationAnswer(text);
     } else if (pending && pending.type === "inbound_alert" && !looksLikeFreshIntent(text)) {
@@ -1705,6 +1769,44 @@ function PanelOne() {
     await playTtsAlert("OK, thanks. I'll send it to the back office.");
   };
 
+  const handleAheadDetails = async (text: string, pending: Extract<PendingFollowUp, { type: "ahead_details" }>) => {
+    let minutes = pending.knownMinutes ?? 10;
+    let reason = pending.knownReason ?? "running ahead";
+    const mentionsDuration = /\b(\d+|an|a|half|one|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty|forty|fifty|sixty)\s*(?:minute|min|hour|hr)\b/i.test(text)
+      || /\bhalf an hour\b/i.test(text);
+    try {
+      const res = await fetch("/api/classify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transcript: text, mode: "delay_details" }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (mentionsDuration && Number.isFinite(data.minutes)) minutes = Math.max(1, Math.round(data.minutes));
+        if (typeof data.reason === "string" && data.reason.length > 0 && data.reason !== "unspecified") reason = data.reason;
+      } else {
+        const fb = parseDelayKeywords(text);
+        if (mentionsDuration) minutes = fb.minutes;
+        if (fb.reason !== "unspecified") reason = fb.reason;
+      }
+    } catch {
+      const fb = parseDelayKeywords(text);
+      if (mentionsDuration) minutes = fb.minutes;
+      if (fb.reason !== "unspecified") reason = fb.reason;
+    }
+    if (reason === "running ahead" || reason === "unspecified") {
+      const lower = text.toLowerCase();
+      if (lower.includes("light traffic") || lower.includes("no traffic")) reason = "light traffic";
+      else if (lower.includes("quick") || lower.includes("fast")) reason = "quick stops";
+      else if (lower.includes("shortcut")) reason = "took a shortcut";
+      else if (text.trim().length > 0 && reason === "unspecified") reason = text.trim().slice(0, 60);
+    }
+    dispatch({ type: "SET_INTENT", payload: { intent: "ahead_details", entity: `−${minutes}min · ${reason}` } });
+    dispatch({ type: "APPLY_AHEAD", payload: { parcelId: pending.parcelId, minutes, reason } });
+    dispatch({ type: "ADD_EVENT", payload: `Driver A: ${pending.parcelId} ahead −${minutes}min — ${reason}` });
+    await playTtsAlert("Great, thanks. I'll let dispatch know you're ahead of schedule.");
+  };
+
   const parseDelayKeywords = (text: string): { minutes: number; reason: string } => {
     const lower = text.toLowerCase();
     const minMatch = lower.match(/(\d+)\s*(?:minute|min)/);
@@ -1765,7 +1867,7 @@ function PanelOne() {
 
   const aParcel =
     state.parcels.find((p) => p.id === state.currentParcelId) ??
-    state.parcels.find((p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed"));
+    state.parcels.find((p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed" || p.status === "early"));
   // While a continuous session is active, keep the "listening" affordance
   // between turns so the waveform doesn't drop to standby during restart gaps.
   const mode: "standby" | "listening" | "speaking" = state.isSpeaking
@@ -2323,6 +2425,8 @@ function PanelThree() {
         return { bg: SI.amberWash, color: SI.amberDeep };
       case "rescheduled":
         return { bg: SI.amberWash, color: SI.amberDeep };
+      case "early":
+        return { bg: SI.accentWash, color: SI.accentDeep };
       case "failed":
         return { bg: SI.rustWash, color: SI.rustDeep };
       default:

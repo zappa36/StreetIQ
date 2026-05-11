@@ -28,15 +28,16 @@ Intents:
 - customer_not_home: Customer is not home, not answering, or unavailable
 - delivery_complete: Driver has successfully delivered a parcel
 - delay_reported: Driver says they will be delayed, late, slowed down, or running behind for one of their parcels (e.g., "I'll be delayed for the next parcel", "running late on delivery 3", "going to be 15 minutes late due to traffic")
+- ahead_reported: Driver says they are ahead of schedule, early, running fast, or making good time on one of their parcels (e.g., "I'm ten minutes early to the next stop", "running ahead of schedule", "I'll be there fifteen minutes sooner", "making good time")
 - request_map: Driver wants to see the map or navigation ("show me the map", "where do I go", "navigate to", "get directions")
 - general: Any other message that doesn't fit the above categories
 
-For the delay_reported intent, also extract:
-- parcelRef: which parcel the delay refers to. Use the literal string the driver said: "next" (default if they say "next parcel/stop/delivery"), an ordinal/number like "1", "2", "3" (if they say "delivery 3", "the second one", "stop number 2"), a parcel id like "P003" (if they say it), a street name (if they reference an address), or empty string if unclear.
-- minutes: estimated delay in whole minutes (integer) IF the driver mentioned a duration (e.g., "15 minutes" → 15, "an hour" → 60, "half an hour" → 30). Omit or set to null if not mentioned.
-- reason: short human-readable phrase for the cause (e.g., "heavy traffic", "flat tire", "accident") IF the driver gave a reason. Omit or set to null if not mentioned.
+For BOTH delay_reported AND ahead_reported intents, also extract:
+- parcelRef: which parcel the message refers to. Use the literal string the driver said: "next" (default if they say "next parcel/stop/delivery"), an ordinal/number like "1", "2", "3" (if they say "delivery 3", "the second one", "stop number 2"), a parcel id like "P003" (if they say it), a street name (if they reference an address), or empty string if unclear.
+- minutes: estimated delta in whole positive minutes (integer) IF the driver mentioned a duration (e.g., "15 minutes" → 15, "an hour" → 60, "half an hour" → 30). Always positive — the intent type indicates direction. Omit or set to null if not mentioned.
+- reason: short human-readable phrase for the cause (e.g., "heavy traffic", "flat tire", "light traffic", "quick stops") IF the driver gave a reason. Omit or set to null if not mentioned.
 
-Respond ONLY with a JSON object in this exact format (no markdown, no explanation). Include parcelRef/minutes/reason ONLY for delay_reported intent:
+Respond ONLY with a JSON object in this exact format (no markdown, no explanation). Include parcelRef/minutes/reason ONLY for delay_reported or ahead_reported intent:
 {
   "intent": "<one of the intents above>",
   "entity": "<extracted street name, customer name, parcel ID, or empty string if not applicable>",
@@ -113,7 +114,7 @@ router.post("/classify", async (req, res) => {
         entity: parsed.entity ?? "",
         confidence: parsed.confidence ?? 0.8,
       };
-      if (intent === "delay_reported") {
+      if (intent === "delay_reported" || intent === "ahead_reported") {
         if (typeof parsed.parcelRef === "string") out.parcelRef = parsed.parcelRef;
         if (Number.isFinite(parsed.minutes)) out.minutes = Math.max(1, Math.round(parsed.minutes));
         if (typeof parsed.reason === "string" && parsed.reason.length > 0) out.reason = parsed.reason;
