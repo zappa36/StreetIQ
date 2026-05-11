@@ -1353,6 +1353,7 @@ function PanelOne() {
   const [sessionActive, setSessionActive] = useState(false);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const fallbackTimerRef = useRef<number | null>(null);
+  const cycleInFlightRef = useRef(false);
 
   const setSessionActiveBoth = (v: boolean) => {
     sessionActiveRef.current = v;
@@ -1373,6 +1374,7 @@ function PanelOne() {
       clearTimeout(fallbackTimerRef.current);
       fallbackTimerRef.current = null;
     }
+    cycleInFlightRef.current = false;
     dispatch({ type: "SET_LISTENING", payload: false });
     if (wasActive && logEvent) {
       dispatch({ type: "ADD_EVENT", payload: "Driver A: continuous voice session ended" });
@@ -1400,6 +1402,9 @@ function PanelOne() {
     });
 
   const startRecognitionCycle = () => {
+    // Single-flight: never start a new cycle while one is in flight.
+    if (cycleInFlightRef.current) return;
+    cycleInFlightRef.current = true;
     dispatch({ type: "SET_LISTENING", payload: true });
     try {
       const SpeechRecognitionCtor =
@@ -1410,35 +1415,47 @@ function PanelOne() {
         recognition.continuous = false;
         recognition.interimResults = false;
         recognitionRef.current = recognition;
+        // Per-cycle guard: only one of onresult/onerror/onend may schedule a restart.
+        let restartScheduled = false;
+        const scheduleRestart = (delayMs: number, waitForSpeech: boolean) => {
+          if (restartScheduled) return;
+          restartScheduled = true;
+          if (recognitionRef.current === recognition) recognitionRef.current = null;
+          cycleInFlightRef.current = false;
+          (async () => {
+            if (waitForSpeech) await waitWhileSpeaking();
+            await new Promise((r) => setTimeout(r, delayMs));
+            if (sessionActiveRef.current && continuousModeRef.current) startRecognitionCycle();
+          })();
+        };
         recognition.onresult = async (event: SpeechRecognitionEvent) => {
           const transcript = event.results[0][0].transcript;
           dispatch({ type: "SET_TRANSCRIPT", payload: transcript });
           dispatch({ type: "SET_LISTENING", payload: false });
           await routeTranscript(transcript);
           if (sessionActiveRef.current && continuousModeRef.current) {
-            await waitWhileSpeaking();
-            await new Promise((r) => setTimeout(r, 350));
-            if (sessionActiveRef.current && continuousModeRef.current) startRecognitionCycle();
+            scheduleRestart(350, true);
+          } else {
+            restartScheduled = true;
+            cycleInFlightRef.current = false;
           }
         };
         recognition.onerror = () => {
           dispatch({ type: "SET_LISTENING", payload: false });
           if (sessionActiveRef.current && continuousModeRef.current) {
-            window.setTimeout(() => {
-              if (sessionActiveRef.current && continuousModeRef.current) startRecognitionCycle();
-            }, 600);
+            scheduleRestart(600, false);
+          } else {
+            restartScheduled = true;
+            cycleInFlightRef.current = false;
           }
         };
         recognition.onend = () => {
-          // If the recognizer stopped without firing a result and we're still in
-          // a session, restart after the speaking phase ends.
+          // Only restart from onend if no result/error already scheduled one.
+          if (restartScheduled) return;
           if (sessionActiveRef.current && continuousModeRef.current && recognitionRef.current === recognition) {
-            recognitionRef.current = null;
-            (async () => {
-              await waitWhileSpeaking();
-              await new Promise((r) => setTimeout(r, 250));
-              if (sessionActiveRef.current && continuousModeRef.current) startRecognitionCycle();
-            })();
+            scheduleRestart(250, true);
+          } else {
+            cycleInFlightRef.current = false;
           }
         };
         recognition.start();
@@ -1453,6 +1470,7 @@ function PanelOne() {
           dispatch({ type: "SET_TRANSCRIPT", payload: fallback });
           dispatch({ type: "SET_LISTENING", payload: false });
           await routeTranscript(fallback);
+          cycleInFlightRef.current = false;
           if (sessionActiveRef.current && continuousModeRef.current) {
             await waitWhileSpeaking();
             await new Promise((r) => setTimeout(r, 350));
@@ -1461,6 +1479,7 @@ function PanelOne() {
         }, 2000);
       }
     } catch {
+      cycleInFlightRef.current = false;
       dispatch({ type: "SET_LISTENING", payload: false });
     }
   };
