@@ -2616,75 +2616,83 @@ function PanelThree() {
         )}
       </div>
 
-      {/* System log strip */}
+    </div>
+  );
+}
+
+// ============================================================
+// SystemLog — shared live event strip (rendered under Panel 03)
+// ============================================================
+function SystemLog() {
+  const { state } = useDemo();
+  return (
+    <div
+      style={{
+        height: 220,
+        flexShrink: 0,
+        background: SI.surface,
+        borderTop: `1px solid ${SI.hair}`,
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
       <div
         style={{
-          height: 220,
-          flexShrink: 0,
-          background: SI.surface,
-          borderTop: `1px solid ${SI.hair}`,
+          padding: "8px 14px",
+          borderBottom: `1px solid ${SI.hair}`,
           display: "flex",
-          flexDirection: "column",
+          justifyContent: "space-between",
+          alignItems: "center",
         }}
       >
-        <div
+        <span
           style={{
-            padding: "8px 14px",
-            borderBottom: `1px solid ${SI.hair}`,
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
+            fontFamily: FONT_MONO,
+            fontSize: 10,
+            color: SI.ink2Deep,
+            letterSpacing: "0.18em",
+            fontWeight: 700,
           }}
         >
+          SYSTEM LOG
+        </span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
           <span
             style={{
-              fontFamily: FONT_MONO,
-              fontSize: 10,
-              color: SI.ink2Deep,
-              letterSpacing: "0.18em",
-              fontWeight: 700,
+              width: 6,
+              height: 6,
+              borderRadius: "50%",
+              background: SI.accent,
+              animation: "si-pulse 1.6s ease-in-out infinite",
             }}
-          >
-            SYSTEM LOG
-          </span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-            <span
+          />
+          <span style={{ fontFamily: FONT_MONO, fontSize: 9, color: SI.accentDeep, letterSpacing: "0.18em", fontWeight: 700 }}>LIVE</span>
+        </span>
+      </div>
+      <div style={{ flex: 1, overflow: "auto", padding: "8px 14px" }}>
+        <AnimatePresence initial={false}>
+          {state.events.map((e) => (
+            <motion.div
+              key={e.id}
+              initial={{ opacity: 0, x: 12 }}
+              animate={{ opacity: 1, x: 0 }}
               style={{
-                width: 6,
-                height: 6,
-                borderRadius: "50%",
-                background: SI.accent,
-                animation: "si-pulse 1.6s ease-in-out infinite",
+                fontFamily: FONT_MONO,
+                fontSize: 10,
+                color: e.message.includes("ALERT") ? SI.amberDeep : SI.inkSoft,
+                fontWeight: e.message.includes("ALERT") ? 700 : 400,
+                lineHeight: 1.7,
+                letterSpacing: "0.02em",
               }}
-            />
-            <span style={{ fontFamily: FONT_MONO, fontSize: 9, color: SI.accentDeep, letterSpacing: "0.18em", fontWeight: 700 }}>LIVE</span>
-          </span>
-        </div>
-        <div style={{ flex: 1, overflow: "auto", padding: "8px 14px" }}>
-          <AnimatePresence initial={false}>
-            {state.events.map((e) => (
-              <motion.div
-                key={e.id}
-                initial={{ opacity: 0, x: 12 }}
-                animate={{ opacity: 1, x: 0 }}
-                style={{
-                  fontFamily: FONT_MONO,
-                  fontSize: 10,
-                  color: e.message.includes("ALERT") ? SI.amberDeep : SI.inkSoft,
-                  fontWeight: e.message.includes("ALERT") ? 700 : 400,
-                  lineHeight: 1.7,
-                  letterSpacing: "0.02em",
-                }}
-              >
-                <span style={{ color: SI.inkFaint, marginRight: 8 }}>[{e.timestamp}]</span>
-                {e.message}
-              </motion.div>
-            ))}
-          </AnimatePresence>
-          {state.events.length === 0 && (
-            <div style={{ fontFamily: FONT_HEAD, fontStyle: "italic", fontSize: 11, color: SI.inkFaint }}>Waiting for events…</div>
-          )}
-        </div>
+            >
+              <span style={{ color: SI.inkFaint, marginRight: 8 }}>[{e.timestamp}]</span>
+              {e.message}
+            </motion.div>
+          ))}
+        </AnimatePresence>
+        {state.events.length === 0 && (
+          <div style={{ fontFamily: FONT_HEAD, fontStyle: "italic", fontSize: 11, color: SI.inkFaint }}>Waiting for events…</div>
+        )}
       </div>
     </div>
   );
@@ -2707,7 +2715,8 @@ function PanelFour() {
         : { bar: SI.accentDeep, wash: SI.accentWash, deep: SI.accentDeep };
 
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", padding: "20px 22px 22px", overflow: "auto" }}>
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "20px 22px 22px", display: "flex", flexDirection: "column" }}>
       {pendingAlert && (
         <div
           style={{
@@ -2855,6 +2864,8 @@ function PanelFour() {
           );
         })}
       </div>
+      </div>
+      <SystemLog />
     </div>
   );
 }
