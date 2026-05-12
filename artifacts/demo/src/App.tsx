@@ -1620,14 +1620,23 @@ export default function App() {
 
     await wait(900);
     if (cancelled(runId)) return;
-    // Driver A is the one impacted — fire the standard inbound notification flow.
-    triggerInboundAlert("maple_closed");
-
-    // Give the "you have a new notification" TTS time to play, then auto-accept
-    // on Driver A's behalf so the scripted demo continues without manual input.
-    await wait(4200);
-    if (cancelled(runId)) return;
+    // Driver A is the one impacted. Inline the inbound-alert flow so we can
+    // await the question TTS to fully finish before auto-accepting — otherwise
+    // the next playTtsAlert would cancel "Would you like to hear it?" mid-sentence.
     const sc = DRIVER_B_SCENARIOS.maple_closed;
+    dispatch({ type: "ADD_EVENT", payload: `Driver B → Dispatch: ${sc.summary}` });
+    dispatch({ type: "ADD_EVENT", payload: `StreetIQ → Driver A: relaying alert (awaiting yes/no)` });
+    const question = `New notification from Driver B about ${sc.summary.toLowerCase()}. Would you like to hear it?`;
+    dispatch({
+      type: "SET_PENDING_FOLLOWUP",
+      payload: { type: "inbound_alert", scenarioId: "maple_closed", summary: sc.summary, fullMessage: sc.fullMessage, question },
+    });
+    await playTtsAlert("You have a new notification. Would you like to hear it?");
+    if (cancelled(runId)) return;
+
+    // Brief beat, then auto-accept on Driver A's behalf so the script keeps moving.
+    await wait(700);
+    if (cancelled(runId)) return;
     dispatch({ type: "SET_INTENT", payload: { intent: "confirm_yes", entity: "maple_closed" } });
     dispatch({ type: "ADD_EVENT", payload: `Driver A: accepted alert "${sc.summary}"` });
     dispatch({ type: "APPLY_INBOUND_SCENARIO", payload: { scenarioId: "maple_closed" } });
