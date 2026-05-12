@@ -2270,17 +2270,10 @@ function PanelOne() {
   };
 
   const handleDelayDetails = async (text: string, pending: Extract<PendingFollowUp, { type: "delay_details" }>) => {
-    let minutes: number | null = pending.knownMinutes ?? null;
+    const knownMinutes = pending.knownMinutes ?? null;
+    let minutes: number | null = knownMinutes;
     let reason = pending.knownReason ?? "unspecified";
-    // Only treat the AI/keyword duration as authoritative when the driver's
-    // follow-up actually mentions a duration — otherwise we'd clobber the
-    // minutes captured on the first turn (e.g. "5 min") with the AI default.
-    // When we explicitly asked the driver "how many minutes?", a bare number
-    // ("12", "twelve") in their reply should be accepted as minutes.
-    const mentionsDuration = /\b(\d+|an|a|half|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty)\s*(?:minute|min|hour|hr)\b/i.test(text)
-      || /\bhalf an hour\b/i.test(text)
-      || (!!pending.minutesAsked && /\b\d+\b/.test(text))
-      || (!!pending.minutesAsked && /\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|twenty-five|thirty|forty|forty-five|fifty|sixty)\b/i.test(text));
+    let aiMinutes: number | null = null;
     try {
       const res = await fetch("/api/classify", {
         method: "POST",
@@ -2289,18 +2282,28 @@ function PanelOne() {
       });
       if (res.ok) {
         const data = await res.json();
-        if (mentionsDuration && Number.isFinite(data.minutes)) minutes = Math.max(1, Math.round(data.minutes));
+        if (Number.isFinite(data.minutes)) {
+          aiMinutes = Math.max(1, Math.round(data.minutes));
+          minutes = aiMinutes;
+        }
         if (typeof data.reason === "string" && data.reason.length > 0 && data.reason !== "unspecified") reason = data.reason;
       } else {
-        const fb = parseDelayKeywords(text);
-        if (mentionsDuration) minutes = fb.minutes;
+        const fb = parseDurationAndReason(text);
+        if (fb.minutes !== null) minutes = fb.minutes;
         if (fb.reason !== "unspecified") reason = fb.reason;
       }
     } catch {
-      const fb = parseDelayKeywords(text);
-      if (mentionsDuration) minutes = fb.minutes;
+      const fb = parseDurationAndReason(text);
+      if (fb.minutes !== null) minutes = fb.minutes;
       if (fb.reason !== "unspecified") reason = fb.reason;
     }
+    // Last-resort: if AI didn't return a number, try local parser on the text.
+    if (minutes === null) {
+      const fb = parseDurationAndReason(text);
+      if (fb.minutes !== null) minutes = fb.minutes;
+      if (reason === "unspecified" && fb.reason !== "unspecified") reason = fb.reason;
+    }
+    console.log("[StreetIQ] handleDelayDetails", { text, knownMinutes, aiMinutes, finalMinutes: minutes, reason, pendingFlags: { reasonAsked: pending.reasonAsked, minutesAsked: pending.minutesAsked } });
     // Catch a reason the keyword list missed (e.g. "car broke down").
     if (reason === "unspecified") {
       const lower = text.toLowerCase();
@@ -2346,12 +2349,10 @@ function PanelOne() {
   };
 
   const handleAheadDetails = async (text: string, pending: Extract<PendingFollowUp, { type: "ahead_details" }>) => {
-    let minutes: number | null = pending.knownMinutes ?? null;
+    const knownMinutes = pending.knownMinutes ?? null;
+    let minutes: number | null = knownMinutes;
     let reason = pending.knownReason ?? "running ahead";
-    const mentionsDuration = /\b(\d+|an|a|half|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty)\s*(?:minute|min|hour|hr)\b/i.test(text)
-      || /\bhalf an hour\b/i.test(text)
-      || (!!pending.minutesAsked && /\b\d+\b/.test(text))
-      || (!!pending.minutesAsked && /\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|twenty-five|thirty|forty|forty-five|fifty|sixty)\b/i.test(text));
+    let aiMinutes: number | null = null;
     try {
       const res = await fetch("/api/classify", {
         method: "POST",
@@ -2360,18 +2361,27 @@ function PanelOne() {
       });
       if (res.ok) {
         const data = await res.json();
-        if (mentionsDuration && Number.isFinite(data.minutes)) minutes = Math.max(1, Math.round(data.minutes));
+        if (Number.isFinite(data.minutes)) {
+          aiMinutes = Math.max(1, Math.round(data.minutes));
+          minutes = aiMinutes;
+        }
         if (typeof data.reason === "string" && data.reason.length > 0 && data.reason !== "unspecified") reason = data.reason;
       } else {
-        const fb = parseDelayKeywords(text);
-        if (mentionsDuration) minutes = fb.minutes;
+        const fb = parseDurationAndReason(text);
+        if (fb.minutes !== null) minutes = fb.minutes;
         if (fb.reason !== "unspecified") reason = fb.reason;
       }
     } catch {
-      const fb = parseDelayKeywords(text);
-      if (mentionsDuration) minutes = fb.minutes;
+      const fb = parseDurationAndReason(text);
+      if (fb.minutes !== null) minutes = fb.minutes;
       if (fb.reason !== "unspecified") reason = fb.reason;
     }
+    if (minutes === null) {
+      const fb = parseDurationAndReason(text);
+      if (fb.minutes !== null) minutes = fb.minutes;
+      if ((reason === "running ahead" || reason === "unspecified") && fb.reason !== "unspecified") reason = fb.reason;
+    }
+    console.log("[StreetIQ] handleAheadDetails", { text, knownMinutes, aiMinutes, finalMinutes: minutes, reason, pendingFlags: { reasonAsked: pending.reasonAsked, minutesAsked: pending.minutesAsked } });
     if (reason === "running ahead" || reason === "unspecified") {
       const lower = text.toLowerCase();
       if (lower.includes("light traffic") || lower.includes("no traffic")) reason = "light traffic";
@@ -2411,18 +2421,63 @@ function PanelOne() {
     await playTtsAlert("Great, thanks. I'll let dispatch know you're ahead of schedule.");
   };
 
-  const parseDelayKeywords = (text: string): { minutes: number; reason: string } => {
-    const lower = text.toLowerCase();
-    const minMatch = lower.match(/(\d+)\s*(?:minute|min)/);
-    const hourMatch = lower.match(/(\d+)\s*hour/);
-    let minutes = 10;
-    if (minMatch) minutes = Math.max(1, parseInt(minMatch[1], 10));
-    else if (hourMatch) minutes = Math.max(1, parseInt(hourMatch[1], 10) * 60);
+  // Robust local parser used as fallback when the AI is unavailable or returns
+  // null minutes. Recognizes bare numbers ("12"), units ("12 minutes", "2 hours"),
+  // single number words ("twelve"), tens ("twenty"), and compound forms
+  // ("twenty-five", "forty five"), plus "an hour" / "half an hour".
+  const parseDurationAndReason = (text: string): { minutes: number | null; reason: string } => {
+    const lower = text.toLowerCase().trim();
+    const ones: Record<string, number> = {
+      one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9,
+      ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15,
+      sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19,
+    };
+    const tens: Record<string, number> = {
+      twenty: 20, thirty: 30, forty: 40, fourty: 40, fifty: 50, sixty: 60,
+    };
+    let minutes: number | null = null;
+    // 1) "<num> hour(s)" → minutes
+    const hourMatch = lower.match(/(\d+(?:\.\d+)?)\s*(?:hour|hr)s?\b/);
+    if (hourMatch) minutes = Math.max(1, Math.round(parseFloat(hourMatch[1]) * 60));
+    // 2) "<num> minute(s)/min(s)"
+    if (minutes === null) {
+      const minMatch = lower.match(/(\d+)\s*(?:minute|min)s?\b/);
+      if (minMatch) minutes = Math.max(1, parseInt(minMatch[1], 10));
+    }
+    // 3) "an hour" / "half an hour" / "a half hour" / "quarter of an hour"
+    if (minutes === null) {
+      if (/\bhalf an hour\b/.test(lower) || /\ba half hour\b/.test(lower) || /\bhalf hour\b/.test(lower)) minutes = 30;
+      else if (/\b(an|one)\s+hour\b/.test(lower)) minutes = 60;
+      else if (/\bquarter\s+(?:of\s+)?an?\s+hour\b/.test(lower)) minutes = 15;
+    }
+    // 4) Compound number word "<tens>[-\s]<ones>" e.g. "twenty-five"
+    if (minutes === null) {
+      const compMatch = lower.match(/\b(twenty|thirty|forty|fourty|fifty|sixty)[\s-]+(one|two|three|four|five|six|seven|eight|nine)\b/);
+      if (compMatch) minutes = tens[compMatch[1]] + ones[compMatch[2]];
+    }
+    // 5) Single number word
+    if (minutes === null) {
+      const wordMatch = lower.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fourty|fifty|sixty)\b/);
+      if (wordMatch) minutes = ones[wordMatch[1]] ?? tens[wordMatch[1]] ?? null;
+    }
+    // 6) Bare integer ("12", "about 12") — last so units take precedence.
+    if (minutes === null) {
+      const bareMatch = lower.match(/\b(\d{1,3})\b/);
+      if (bareMatch) {
+        const n = parseInt(bareMatch[1], 10);
+        if (n >= 1 && n <= 240) minutes = n;
+      }
+    }
     let reason = "unspecified";
-    if (lower.includes("traffic")) reason = "heavy traffic";
+    if (lower.includes("traffic")) reason = lower.includes("light") || lower.includes("no traffic") ? "light traffic" : "heavy traffic";
     else if (lower.includes("tire") || lower.includes("flat")) reason = "flat tire";
     else if (lower.includes("accident")) reason = "accident on route";
     else if (lower.includes("customer")) reason = "long customer interaction";
+    else if (lower.includes("broke down") || lower.includes("breakdown")) reason = "vehicle broke down";
+    else if (lower.includes("engine")) reason = "engine trouble";
+    else if (lower.includes("battery")) reason = "battery issue";
+    else if (lower.includes("park")) reason = "parking trouble";
+    else if (lower.includes("shortcut")) reason = "took a shortcut";
     return { minutes, reason };
   };
 
