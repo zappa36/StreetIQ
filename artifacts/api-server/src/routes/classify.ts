@@ -48,11 +48,11 @@ Respond ONLY with a JSON object in this exact format (no markdown, no explanatio
   "confidence": <0.0 to 1.0>
 }`;
 
-const DELAY_DETAILS_PROMPT = `You are extracting delay details from a delivery driver's spoken follow-up answer. The driver was just asked: "How long will the delay be, and what happened?".
+const DELAY_DETAILS_PROMPT = `You are extracting delay (or ahead-of-schedule) details from a delivery driver's spoken follow-up answer. The driver was just asked something like "How long will the delay be?", "How many minutes?", or "What's the reason?".
 
 From the driver's reply, extract:
-- minutes: the EXACT positive integer the driver said. Do NOT round to 5 or 10. "7 minutes" → 7, "12 minutes" → 12, "an hour" → 60, "half an hour" → 30. If they did not state a duration, set minutes to null (do NOT guess).
-- reason: a short human-readable phrase describing the cause (e.g., "heavy traffic", "flat tire", "long customer interaction"). If no reason given, use "unspecified".
+- minutes: the EXACT positive integer the driver said, in MINUTES. Do NOT round to 5 or 10. Treat a BARE NUMBER as minutes ("12" → 12, "about 12" → 12, "twelve" → 12, "twenty-five" → 25). Words like "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty", "twenty-five", "thirty", "forty-five", "an hour" → 60, "half an hour" → 30 must all be supported. If they did not state any duration, set minutes to null (do NOT guess).
+- reason: a short human-readable phrase describing the cause (e.g., "heavy traffic", "flat tire", "long customer interaction", "took a shortcut"). If no reason given, use "unspecified".
 
 Respond ONLY with a JSON object in this exact format (no markdown, no explanation):
 {

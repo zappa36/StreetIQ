@@ -2275,8 +2275,12 @@ function PanelOne() {
     // Only treat the AI/keyword duration as authoritative when the driver's
     // follow-up actually mentions a duration — otherwise we'd clobber the
     // minutes captured on the first turn (e.g. "5 min") with the AI default.
-    const mentionsDuration = /\b(\d+|an|a|half|one|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty|forty|fifty|sixty)\s*(?:minute|min|hour|hr)\b/i.test(text)
-      || /\bhalf an hour\b/i.test(text);
+    // When we explicitly asked the driver "how many minutes?", a bare number
+    // ("12", "twelve") in their reply should be accepted as minutes.
+    const mentionsDuration = /\b(\d+|an|a|half|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty)\s*(?:minute|min|hour|hr)\b/i.test(text)
+      || /\bhalf an hour\b/i.test(text)
+      || (!!pending.minutesAsked && /\b\d+\b/.test(text))
+      || (!!pending.minutesAsked && /\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|twenty-five|thirty|forty|forty-five|fifty|sixty)\b/i.test(text));
     try {
       const res = await fetch("/api/classify", {
         method: "POST",
@@ -2344,8 +2348,10 @@ function PanelOne() {
   const handleAheadDetails = async (text: string, pending: Extract<PendingFollowUp, { type: "ahead_details" }>) => {
     let minutes: number | null = pending.knownMinutes ?? null;
     let reason = pending.knownReason ?? "running ahead";
-    const mentionsDuration = /\b(\d+|an|a|half|one|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty|forty|fifty|sixty)\s*(?:minute|min|hour|hr)\b/i.test(text)
-      || /\bhalf an hour\b/i.test(text);
+    const mentionsDuration = /\b(\d+|an|a|half|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty)\s*(?:minute|min|hour|hr)\b/i.test(text)
+      || /\bhalf an hour\b/i.test(text)
+      || (!!pending.minutesAsked && /\b\d+\b/.test(text))
+      || (!!pending.minutesAsked && /\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|twenty-five|thirty|forty|forty-five|fifty|sixty)\b/i.test(text));
     try {
       const res = await fetch("/api/classify", {
         method: "POST",
