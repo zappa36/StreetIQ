@@ -2444,6 +2444,15 @@ function PanelOne() {
       const minMatch = lower.match(/(\d+)\s*(?:minute|min)s?\b/);
       if (minMatch) minutes = Math.max(1, parseInt(minMatch[1], 10));
     }
+    // 2b) word + unit, e.g. "two hours", "twenty minutes", "twenty-five minutes"
+    if (minutes === null) {
+      const wordHr = lower.match(/\b(?:(twenty|thirty|forty|fourty|fifty|sixty)[\s-]+(one|two|three|four|five|six|seven|eight|nine)|(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fourty|fifty|sixty))\s*(hour|hr|minute|min)s?\b/);
+      if (wordHr) {
+        const n = wordHr[1] ? tens[wordHr[1]] + ones[wordHr[2]] : (ones[wordHr[3]] ?? tens[wordHr[3]]);
+        const unit = wordHr[4];
+        if (Number.isFinite(n)) minutes = unit.startsWith("h") ? n * 60 : n;
+      }
+    }
     // 3) "an hour" / "half an hour" / "a half hour" / "quarter of an hour"
     if (minutes === null) {
       if (/\bhalf an hour\b/.test(lower) || /\ba half hour\b/.test(lower) || /\bhalf hour\b/.test(lower)) minutes = 30;
