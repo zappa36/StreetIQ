@@ -231,6 +231,12 @@ const SCENARIOS: { id: string; title: string; description: string }[] = [
     description:
       "Driver B reports Maple Avenue is closed. StreetIQ relays the closure to Driver A and offers an alternate route that affects their stops.",
   },
+  {
+    id: "back_office",
+    title: "Scenario 4 — Back Office Rebalance",
+    description:
+      "Driver A piles up delays. Back Office Otto detects Driver A is falling behind, recommends moving the last two stops to Driver B, and rebalances after dispatch accepts.",
+  },
 ];
 
 // --- Driver B → Driver A scenarios (Panel 4 buttons) ---
@@ -1645,10 +1651,92 @@ export default function App() {
     await playTtsAlert(sc.fullMessage);
   };
 
+  const runScenarioBackOffice = async (runId: number) => {
+    await wait(500);
+    if (cancelled(runId)) return;
+
+    // Beat 1 — Driver A voice-reports a delay on P002.
+    dispatch({ type: "SET_TRANSCRIPT", payload: "Hey Otto, I'll be 15 minutes late on parcel two — heavy traffic on Maple" });
+    dispatch({ type: "SET_INTENT", payload: { intent: "delay_reported", entity: "P002" } });
+    dispatch({ type: "APPLY_DELAY", payload: { parcelId: "P002", minutes: 15, reason: "heavy traffic" } });
+    dispatch({ type: "ADD_EVENT", payload: `Driver A: delay_reported P002 (+15m heavy traffic)` });
+    await playTtsAlert("Got it. Parcel two on Maple Avenue pushed back fifteen minutes for heavy traffic. I've let dispatch know.");
+    if (cancelled(runId)) return;
+
+    await wait(900);
+    if (cancelled(runId)) return;
+
+    // Beat 2 — second delay on P003 trips the back-office trigger threshold.
+    dispatch({ type: "SET_TRANSCRIPT", payload: "Otto, parcel three is also going to be late — about 15 minutes for construction" });
+    dispatch({ type: "SET_INTENT", payload: { intent: "delay_reported", entity: "P003" } });
+    dispatch({ type: "APPLY_DELAY", payload: { parcelId: "P003", minutes: 15, reason: "construction" } });
+    dispatch({ type: "ADD_EVENT", payload: `Driver A: delay_reported P003 (+15m construction)` });
+    await playTtsAlert("Got it. Parcel three on Pine Road pushed back fifteen minutes for construction. Dispatch is updated.");
+    if (cancelled(runId)) return;
+
+    // Beat 3 — wait for the back-office watcher effect to raise a recommendation.
+    let waited = 0;
+    while (!stateRef.current.backOfficeRecommendation && waited < 3000) {
+      await wait(150);
+      waited += 150;
+      if (cancelled(runId)) return;
+    }
+    const rec = stateRef.current.backOfficeRecommendation;
+    if (!rec) return;
+
+    await wait(700);
+    if (cancelled(runId)) return;
+
+    // Beat 4 — back-office Otto narrates the recommendation (auto-press AI button).
+    await playBackOfficeTts(rec.narration);
+    if (cancelled(runId)) return;
+
+    await wait(700);
+    if (cancelled(runId)) return;
+
+    // Beat 5 — dispatcher accepts. Apply the rebalance and have Otto confirm.
+    const moveLabels = rec.parcelIdsToMove
+      .map((id) => stateRef.current.parcels.find((p) => p.id === id))
+      .filter((p): p is Parcel => !!p)
+      .map((p) => `${p.id} — ${p.address}`)
+      .join(", ");
+    const moveCount = rec.parcelIdsToMove.length;
+    dispatch({ type: "APPLY_BACK_OFFICE_REC" });
+    dispatch({ type: "ADD_EVENT", payload: `Dispatcher accepted Back Office Otto's rebalancing → moved ${moveLabels} to Driver B` });
+    await playBackOfficeTts("Done. I've moved the stops over and refreshed both routes.");
+    if (cancelled(runId)) return;
+
+    await wait(500);
+    if (cancelled(runId)) return;
+
+    // Beat 6 — driver A gets the standard inbound notification handshake.
+    const summary = `dispatch rebalance — ${moveCount === 1 ? "1 stop" : `${moveCount} stops`} moved to your colleague`;
+    const fullMessage = `Dispatch rebalanced your route — ${moveCount === 1 ? "one stop has" : `${moveCount} stops have`} been moved to your colleague. Your remaining ETAs are updated.`;
+    const question = "New notification from dispatch. Would you like to hear it?";
+    dispatch({ type: "ADD_EVENT", payload: `StreetIQ → Driver A: relaying rebalance alert (awaiting yes/no)` });
+    dispatch({
+      type: "SET_PENDING_FOLLOWUP",
+      payload: { type: "inbound_alert", scenarioId: null, summary, fullMessage, question },
+    });
+    await playTtsAlert("You have a new notification. Would you like to hear it?");
+    if (cancelled(runId)) return;
+
+    await wait(700);
+    if (cancelled(runId)) return;
+
+    // Beat 7 — auto-accept on Driver A's behalf and play the rebalance message.
+    dispatch({ type: "SET_INTENT", payload: { intent: "confirm_yes", entity: "rebalance" } });
+    dispatch({ type: "ADD_EVENT", payload: `Driver A: accepted alert "${summary}"` });
+    dispatch({ type: "ADD_EVENT", payload: `StreetIQ → Driver A: ${fullMessage}` });
+    dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
+    await playTtsAlert(fullMessage);
+  };
+
   const SCENARIO_RUNNERS: Array<(runId: number) => Promise<void>> = [
     runScenarioNavigation,
     runScenarioDelay,
     runScenarioReroute,
+    runScenarioBackOffice,
   ];
 
   const queueScenario = (idx: number) => {
