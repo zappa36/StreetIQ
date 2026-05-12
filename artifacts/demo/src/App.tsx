@@ -919,7 +919,7 @@ function TopBar({
 
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: 24 }}>
         <span style={{ fontFamily: FONT_MONO, fontSize: 10, color: SI.inkFaint, letterSpacing: "0.14em" }}>DRIVER A</span>
-        {(["Driving", "Approaching", "Parked"] as DriverState[]).map((s) => (
+        {(["Approaching", "Parked"] as DriverState[]).map((s) => (
           <button
             key={s}
             data-testid={`btn-sim-a-${s}`}
