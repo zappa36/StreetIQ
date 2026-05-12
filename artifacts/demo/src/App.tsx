@@ -2320,6 +2320,7 @@ function PanelOne() {
     dispatch({ type: "SET_INTENT", payload: { intent: "delay_details", entity: `+${minutes}min · ${reason}` } });
     dispatch({ type: "APPLY_DELAY", payload: { parcelId: pending.parcelId, minutes, reason } });
     dispatch({ type: "ADD_EVENT", payload: `Driver A: ${pending.parcelId} delayed +${minutes}min — ${reason}` });
+    dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
     await playTtsAlert("OK, thanks. I'll send it to the back office.");
   };
 
@@ -2367,6 +2368,7 @@ function PanelOne() {
     dispatch({ type: "SET_INTENT", payload: { intent: "ahead_details", entity: `−${minutes}min · ${reason}` } });
     dispatch({ type: "APPLY_AHEAD", payload: { parcelId: pending.parcelId, minutes, reason } });
     dispatch({ type: "ADD_EVENT", payload: `Driver A: ${pending.parcelId} ahead −${minutes}min — ${reason}` });
+    dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
     await playTtsAlert("Great, thanks. I'll let dispatch know you're ahead of schedule.");
   };
 
