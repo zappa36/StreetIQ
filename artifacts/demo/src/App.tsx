@@ -61,8 +61,8 @@ interface ParkingSpot {
 type DriverBScenarioId = "maple_closed" | "oak_traffic" | "customer_unavailable" | "parking_tip" | "oak_accident";
 
 type PendingFollowUp =
-  | { type: "delay_details"; parcelId: string; parcelLabel: string; question: string; knownMinutes: number | null; knownReason: string | null }
-  | { type: "ahead_details"; parcelId: string; parcelLabel: string; question: string; knownMinutes: number | null; knownReason: string | null }
+  | { type: "delay_details"; parcelId: string; parcelLabel: string; question: string; knownMinutes: number | null; knownReason: string | null; reasonAsked?: boolean; minutesAsked?: boolean }
+  | { type: "ahead_details"; parcelId: string; parcelLabel: string; question: string; knownMinutes: number | null; knownReason: string | null; reasonAsked?: boolean; minutesAsked?: boolean }
   | { type: "confirm_navigation"; question: string; contextLabel: string }
   | { type: "inbound_alert"; scenarioId: DriverBScenarioId | null; summary: string; fullMessage: string; question: string };
 
@@ -2297,25 +2297,42 @@ function PanelOne() {
       if (mentionsDuration) minutes = fb.minutes;
       if (fb.reason !== "unspecified") reason = fb.reason;
     }
-    // Catch a reason the keyword list missed (e.g. "car broke down") so we
-    // don't fall back to "unspecified" when the driver clearly stated one.
+    // Catch a reason the keyword list missed (e.g. "car broke down").
     if (reason === "unspecified") {
       const lower = text.toLowerCase();
       if (lower.includes("broke down") || lower.includes("breakdown")) reason = "vehicle broke down";
       else if (lower.includes("engine")) reason = "engine trouble";
       else if (lower.includes("battery")) reason = "battery issue";
       else if (lower.includes("park")) reason = "parking trouble";
-      else if (text.trim().length > 0) reason = text.trim().slice(0, 60);
     }
-    // If we still don't know the duration, re-ask instead of guessing 10.
+    // If we still don't know the duration, re-ask instead of guessing.
     if (minutes === null) {
+      const reasonKnown = reason !== "unspecified";
+      const q = `How many minutes will ${pending.parcelLabel} be delayed?`;
       dispatch({
         type: "SET_PENDING_FOLLOWUP",
-        payload: { type: "delay_details", parcelId: pending.parcelId, parcelLabel: pending.parcelLabel, question: `How many minutes will ${pending.parcelLabel} be delayed?`, knownMinutes: null, knownReason: reason !== "unspecified" ? reason : null },
+        payload: { type: "delay_details", parcelId: pending.parcelId, parcelLabel: pending.parcelLabel, question: q, knownMinutes: null, knownReason: reasonKnown ? reason : null, reasonAsked: pending.reasonAsked || reasonKnown, minutesAsked: true },
       });
       dispatch({ type: "ADD_EVENT", payload: `Otto: re-asking — duration not captured for ${pending.parcelId}` });
       await playTtsAlert(`I didn't catch the number of minutes — how long will ${pending.parcelLabel} be delayed?`);
       return;
+    }
+    // Duration is known but no reason yet — ask once for the reason.
+    if (reason === "unspecified" && !pending.reasonAsked) {
+      const q = `What's the reason for the delay on ${pending.parcelLabel}?`;
+      dispatch({
+        type: "SET_PENDING_FOLLOWUP",
+        payload: { type: "delay_details", parcelId: pending.parcelId, parcelLabel: pending.parcelLabel, question: q, knownMinutes: minutes, knownReason: null, reasonAsked: true, minutesAsked: pending.minutesAsked || true },
+      });
+      dispatch({ type: "ADD_EVENT", payload: `Otto: follow-up — asking for reason on ${pending.parcelId}` });
+      await playTtsAlert(`Got it, ${minutes} minutes. What's the reason for the delay?`);
+      return;
+    }
+    // We've already asked for the reason once — accept whatever we have (use the
+    // raw reply as a free-form reason, or fall back to "unspecified").
+    if (reason === "unspecified" && pending.reasonAsked) {
+      const trimmed = text.trim();
+      if (trimmed.length > 0) reason = trimmed.slice(0, 60);
     }
     dispatch({ type: "SET_INTENT", payload: { intent: "delay_details", entity: `+${minutes}min · ${reason}` } });
     dispatch({ type: "APPLY_DELAY", payload: { parcelId: pending.parcelId, minutes, reason } });
@@ -2357,13 +2374,29 @@ function PanelOne() {
       else if (text.trim().length > 0 && reason === "unspecified") reason = text.trim().slice(0, 60);
     }
     if (minutes === null) {
+      const reasonKnown = reason !== "running ahead" && reason !== "unspecified";
       dispatch({
         type: "SET_PENDING_FOLLOWUP",
-        payload: { type: "ahead_details", parcelId: pending.parcelId, parcelLabel: pending.parcelLabel, question: `How many minutes ahead are you on ${pending.parcelLabel}?`, knownMinutes: null, knownReason: reason !== "running ahead" && reason !== "unspecified" ? reason : null },
+        payload: { type: "ahead_details", parcelId: pending.parcelId, parcelLabel: pending.parcelLabel, question: `How many minutes ahead are you on ${pending.parcelLabel}?`, knownMinutes: null, knownReason: reasonKnown ? reason : null, reasonAsked: pending.reasonAsked || reasonKnown, minutesAsked: true },
       });
       dispatch({ type: "ADD_EVENT", payload: `Otto: re-asking — duration not captured for ${pending.parcelId}` });
       await playTtsAlert(`I didn't catch the number of minutes — how far ahead are you on ${pending.parcelLabel}?`);
       return;
+    }
+    // Duration is known but no reason yet — ask once for the reason.
+    if ((reason === "running ahead" || reason === "unspecified") && !pending.reasonAsked) {
+      const q = `What's helping you run ahead on ${pending.parcelLabel}?`;
+      dispatch({
+        type: "SET_PENDING_FOLLOWUP",
+        payload: { type: "ahead_details", parcelId: pending.parcelId, parcelLabel: pending.parcelLabel, question: q, knownMinutes: minutes, knownReason: null, reasonAsked: true, minutesAsked: pending.minutesAsked || true },
+      });
+      dispatch({ type: "ADD_EVENT", payload: `Otto: follow-up — asking for reason on ${pending.parcelId}` });
+      await playTtsAlert(`Nice, ${minutes} minutes ahead. What's helping you run ahead?`);
+      return;
+    }
+    if ((reason === "running ahead" || reason === "unspecified") && pending.reasonAsked) {
+      const trimmed = text.trim();
+      if (trimmed.length > 0) reason = trimmed.slice(0, 60);
     }
     dispatch({ type: "SET_INTENT", payload: { intent: "ahead_details", entity: `−${minutes}min · ${reason}` } });
     dispatch({ type: "APPLY_AHEAD", payload: { parcelId: pending.parcelId, minutes, reason } });
