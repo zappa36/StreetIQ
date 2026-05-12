@@ -1708,9 +1708,18 @@ export default function App() {
   const handleStopDemo = () => {
     demoRunIdRef.current += 1;
     scriptedDemoActiveRef.current = false;
+    runSingleRef.current = false;
     clearDemoTimers();
     flushWaits();
-    try { window.speechSynthesis?.cancel(); } catch {}
+    // Bump the TTS token so any in-flight fetch resolves into a no-op,
+    // then cancel currently-playing audio (HTML <audio> + Web Speech).
+    ttsTokenRef.current += 1;
+    if (currentTtsRef.current) {
+      try { currentTtsRef.current.cancel(); } catch { /* ignore */ }
+      currentTtsRef.current = null;
+    }
+    try { cancelBackOfficeTts(); } catch { /* ignore */ }
+    try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
     dispatch({ type: "SET_SPEAKING", payload: false });
     dispatch({ type: "SET_RUNNING_DEMO", payload: false });
     dispatch({ type: "SET_SCENARIO_GATE", payload: { idx: -1, awaiting: false } });
