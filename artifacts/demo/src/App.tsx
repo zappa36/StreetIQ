@@ -816,19 +816,6 @@ function PanelShell({
         }}
       >
         <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: highlight ? 5 : 3, background: accent }} />
-        {index && (
-          <span
-            style={{
-              fontFamily: FONT_MONO,
-              fontSize: 11,
-              color: accent,
-              letterSpacing: "0.18em",
-              fontWeight: 600,
-            }}
-          >
-            PANEL {index}
-          </span>
-        )}
         <span
           style={{
             fontFamily: FONT_HEAD,
