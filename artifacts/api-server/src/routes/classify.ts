@@ -29,7 +29,8 @@ Intents:
 - delivery_complete: Driver has successfully delivered a parcel
 - delay_reported: Driver says they will be delayed, late, slowed down, or running behind for one of their parcels (e.g., "I'll be delayed for the next parcel", "running late on delivery 3", "going to be 15 minutes late due to traffic")
 - ahead_reported: Driver says they are ahead of schedule, early, running fast, or making good time on one of their parcels (e.g., "I'm ten minutes early to the next stop", "running ahead of schedule", "I'll be there fifteen minutes sooner", "making good time")
-- request_map: Driver wants to see the map or navigation ("show me the map", "where do I go", "navigate to", "get directions")
+- request_map: Driver explicitly wants to see the map or navigation UI ("show me the map", "open the map", "navigate to", "get directions", "pull up the map")
+- query_next_stop: Driver is asking what their next delivery is, where they're going next, or for the next stop's ETA WITHOUT explicitly asking for the map ("what's my next stop", "which is my next delivery", "where to next", "what's next", "what's after this one", "when is my next delivery")
 - general: Any other message that doesn't fit the above categories
 
 For BOTH delay_reported AND ahead_reported intents, also extract:

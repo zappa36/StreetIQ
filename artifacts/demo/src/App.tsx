@@ -1341,6 +1341,23 @@ export default function App() {
     } else if (intent === "request_map") {
       dispatch({ type: "ADD_EVENT", payload: `Driver A: request_map` });
       dispatch({ type: "SET_MAP_VISIBLE", payload: true });
+    } else if (intent === "query_next_stop") {
+      // Find the delivery AFTER the current one on Driver A's open route.
+      const aOpen = stateRef.current.parcels.filter(
+        (p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed" || p.status === "early")
+      );
+      const curId = stateRef.current.currentParcelId;
+      const curIdx = curId ? aOpen.findIndex((p) => p.id === curId) : -1;
+      const next = curIdx >= 0 ? aOpen[curIdx + 1] : aOpen[0];
+      if (next) {
+        const delayed = next.status === "delayed" ? " — currently flagged as delayed" : "";
+        const msg = `Your next stop after the current one is ${next.id}, ${next.customer} at ${next.address}, ETA ${next.eta}${delayed}.`;
+        dispatch({ type: "ADD_EVENT", payload: `Driver A: query_next_stop → ${next.id} (${next.eta})` });
+        playTtsAlert(msg);
+      } else {
+        dispatch({ type: "ADD_EVENT", payload: `Driver A: query_next_stop → no upcoming stop` });
+        playTtsAlert("You have no more stops after the current one.");
+      }
     } else if (intent === "delay_reported") {
       const target = resolveDelayParcel(extras.parcelRef);
       if (target) {
