@@ -1622,6 +1622,18 @@ export default function App() {
     if (cancelled(runId)) return;
     // Driver A is the one impacted — fire the standard inbound notification flow.
     triggerInboundAlert("maple_closed");
+
+    // Give the "you have a new notification" TTS time to play, then auto-accept
+    // on Driver A's behalf so the scripted demo continues without manual input.
+    await wait(4200);
+    if (cancelled(runId)) return;
+    const sc = DRIVER_B_SCENARIOS.maple_closed;
+    dispatch({ type: "SET_INTENT", payload: { intent: "confirm_yes", entity: "maple_closed" } });
+    dispatch({ type: "ADD_EVENT", payload: `Driver A: accepted alert "${sc.summary}"` });
+    dispatch({ type: "APPLY_INBOUND_SCENARIO", payload: { scenarioId: "maple_closed" } });
+    dispatch({ type: "ADD_EVENT", payload: `StreetIQ → Driver A: ${sc.fullMessage}` });
+    dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
+    await playTtsAlert(sc.fullMessage);
   };
 
   const SCENARIO_RUNNERS: Array<(runId: number) => Promise<void>> = [
