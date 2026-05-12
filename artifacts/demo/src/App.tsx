@@ -235,7 +235,7 @@ const SCENARIOS: { id: string; title: string; description: string }[] = [
     id: "back_office",
     title: "Scenario 4 — Back Office Rebalance",
     description:
-      "Driver A piles up delays. Back Office Otto detects Driver A is falling behind, recommends moving the last two stops to Driver B, and rebalances after dispatch accepts.",
+      "Driver A piles up delays. Back Office Otto detects Driver A is falling behind, recommends rescheduling the last two stops to tomorrow, and rebalances after dispatch accepts.",
   },
 ];
 
@@ -680,37 +680,41 @@ function reducer(state: AppState, action: Action): AppState {
       const rec = state.backOfficeRecommendation;
       if (!rec) return state;
       const moveSet = new Set(rec.parcelIdsToMove);
-      // Flip selected parcels to Driver B and clear delay statuses on the moved parcels.
-      const moved = state.parcels.map((p) =>
-        moveSet.has(p.id)
-          ? {
-              ...p,
-              driver: "Driver B" as const,
-              status: "pending" as ParcelStatus,
-              delayReasons: [...(p.delayReasons ?? []), "reassigned by Back Office Otto"],
-            }
-          : p
-      );
-      // Restamp Driver A's remaining open route, then space Driver B's new
-      // route 15 min apart starting just after Driver A's earliest open ETA.
+      // Reschedule selected parcels to tomorrow (09:00 onward, spaced 15 min apart in route order).
+      // They stay on Driver A's manifest but are marked "rescheduled" so they drop out of today's route.
+      const orderedIds = state.parcels
+        .filter((p) => moveSet.has(p.id))
+        .map((p) => p.id);
+      const tomorrowEtaById = new Map<string, string>();
+      orderedIds.forEach((id, i) => {
+        const total = 9 * 60 + i * 15;
+        const h = Math.floor(total / 60);
+        const m = total % 60;
+        tomorrowEtaById.set(id, `Tmrw ${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}`);
+      });
+      const moved = state.parcels.map((p) => {
+        if (!moveSet.has(p.id)) return p;
+        const newEta = tomorrowEtaById.get(p.id) ?? "Tmrw 09:00";
+        return {
+          ...p,
+          status: "rescheduled" as ParcelStatus,
+          eta: newEta,
+          delayReasons: [...(p.delayReasons ?? []), `rescheduled to tomorrow by Back Office Otto (${newEta})`],
+        };
+      });
+      // Restamp Driver A's remaining open route — rescheduled stops are skipped by the restamper.
       const restampedA = restampDriverARoute(moved, { generalTag: "re-sequenced after rebalancing" });
-      // Anchor Driver B's restamped route at "now + 5 min" off the wall clock,
-      // so re-stamped ETAs reflect live timing (not stale plan times).
-      const nowDate = new Date();
-      const anchorMin = (nowDate.getHours() * 60 + nowDate.getMinutes() + 5) % 1440;
-      const anchor = `${Math.floor(anchorMin / 60).toString().padStart(2, "0")}:${(anchorMin % 60).toString().padStart(2, "0")}`;
-      const restampedB = restampDriverBRoute(restampedA, anchor);
-      // Advance currentParcelId if the current one was moved off Driver A.
+      // Advance currentParcelId if the current one was rescheduled off today's route.
       let nextCurrent = state.currentParcelId;
       if (nextCurrent && moveSet.has(nextCurrent)) {
-        const nextOpen = restampedB.find(
+        const nextOpen = restampedA.find(
           (p) => p.driver === "Driver A" && (p.status === "pending" || p.status === "delayed" || p.status === "early")
         );
         nextCurrent = nextOpen ? nextOpen.id : null;
       }
       return {
         ...state,
-        parcels: restampedB,
+        parcels: restampedA,
         currentParcelId: nextCurrent,
         backOfficeRecommendation: null,
         backOfficeNotification: false,
@@ -1442,15 +1446,15 @@ export default function App() {
     const trigger = totalDelayMin >= 25 || delayedCount >= 2 || !!hardCutoffBreach;
     if (!trigger) return;
     // Pick the latest N open parcels (preserve route order; take from the tail)
-    // and move them to Driver B. Move at most 2, at least 1, and never the
-    // current parcel the driver is actively working.
+    // and reschedule them to tomorrow. Move at most 2, at least 1, and never
+    // the current parcel the driver is actively working.
     const movable = aOpen.filter((p) => p.id !== state.currentParcelId);
     if (movable.length === 0) return;
     const moveCount = Math.min(2, movable.length);
     const toMove = movable.slice(-moveCount);
     const moveLabels = toMove.map((p) => `${p.id} — ${p.address}`).join(" and ");
-    const summary = `Driver A is ${totalDelayMin} min behind across ${aOpen.length} stops (${delayedCount} flagged delayed). I'd move ${moveCount === 1 ? "the last stop" : `the last ${moveCount} stops`} (${moveLabels}) to Driver B so Driver A can catch up.`;
-    const narration = `Heads up — Driver A is now about ${totalDelayMin} minutes behind across ${aOpen.length} stops. I'd recommend moving ${moveLabels} over to Driver B. Want to accept?`;
+    const summary = `Driver A is ${totalDelayMin} min behind across ${aOpen.length} stops (${delayedCount} flagged delayed). I'd reschedule ${moveCount === 1 ? "the last stop" : `the last ${moveCount} stops`} (${moveLabels}) to tomorrow so Driver A can catch up.`;
+    const narration = `Heads up — Driver A is now about ${totalDelayMin} minutes behind across ${aOpen.length} stops. I'd recommend rescheduling ${moveLabels} to tomorrow. Want to accept?`;
     const now = new Date();
     const stamp = `${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}:${now.getSeconds().toString().padStart(2, "0")}`;
     const snapshotKey = `${totalDelayMin}|${delayedCount}|${hardCutoffBreach?.id ?? ""}|${toMove.map((p) => p.id).join(",")}`;
@@ -1486,14 +1490,14 @@ export default function App() {
       .join(", ");
     const moveCount = rec.parcelIdsToMove.length;
     dispatch({ type: "APPLY_BACK_OFFICE_REC" });
-    dispatch({ type: "ADD_EVENT", payload: `Dispatcher accepted Back Office Otto's rebalancing → moved ${moveLabels} to Driver B` });
+    dispatch({ type: "ADD_EVENT", payload: `Dispatcher accepted Back Office Otto's rebalancing → rescheduled ${moveLabels} to tomorrow` });
     // 1) Back office Otto speaks first — wait for it to finish before driver Otto chimes in.
-    await playBackOfficeTts("Done. I've moved the stops over and refreshed both routes.");
+    await playBackOfficeTts("Done. I've rescheduled the stops to tomorrow and refreshed Driver A's route.");
     // 2) Driver Otto then queues an inbound notification using the standard
     //    "you have a new notification, do you want to hear it?" pattern — the
     //    full rebalance message is delivered only after the driver answers yes.
-    const summary = `dispatch rebalance — ${moveCount === 1 ? "1 stop" : `${moveCount} stops`} moved to your colleague`;
-    const fullMessage = `Dispatch rebalanced your route — ${moveCount === 1 ? "one stop has" : `${moveCount} stops have`} been moved to your colleague. Your remaining ETAs are updated.`;
+    const summary = `dispatch rebalance — ${moveCount === 1 ? "1 stop" : `${moveCount} stops`} rescheduled to tomorrow`;
+    const fullMessage = `Dispatch rescheduled ${moveCount === 1 ? "one stop" : `${moveCount} stops`} on your route to tomorrow. Your remaining ETAs are updated.`;
     const question = "New notification from dispatch. Would you like to hear it?";
     dispatch({ type: "ADD_EVENT", payload: `StreetIQ → Driver A: relaying rebalance alert (awaiting yes/no)` });
     dispatch({
@@ -1702,16 +1706,16 @@ export default function App() {
       .join(", ");
     const moveCount = rec.parcelIdsToMove.length;
     dispatch({ type: "APPLY_BACK_OFFICE_REC" });
-    dispatch({ type: "ADD_EVENT", payload: `Dispatcher accepted Back Office Otto's rebalancing → moved ${moveLabels} to Driver B` });
-    await playBackOfficeTts("Done. I've moved the stops over and refreshed both routes.");
+    dispatch({ type: "ADD_EVENT", payload: `Dispatcher accepted Back Office Otto's rebalancing → rescheduled ${moveLabels} to tomorrow` });
+    await playBackOfficeTts("Done. I've rescheduled the stops to tomorrow and refreshed Driver A's route.");
     if (cancelled(runId)) return;
 
     await wait(500);
     if (cancelled(runId)) return;
 
     // Beat 6 — driver A gets the standard inbound notification handshake.
-    const summary = `dispatch rebalance — ${moveCount === 1 ? "1 stop" : `${moveCount} stops`} moved to your colleague`;
-    const fullMessage = `Dispatch rebalanced your route — ${moveCount === 1 ? "one stop has" : `${moveCount} stops have`} been moved to your colleague. Your remaining ETAs are updated.`;
+    const summary = `dispatch rebalance — ${moveCount === 1 ? "1 stop" : `${moveCount} stops`} rescheduled to tomorrow`;
+    const fullMessage = `Dispatch rescheduled ${moveCount === 1 ? "one stop" : `${moveCount} stops`} on your route to tomorrow. Your remaining ETAs are updated.`;
     const question = "New notification from dispatch. Would you like to hear it?";
     dispatch({ type: "ADD_EVENT", payload: `StreetIQ → Driver A: relaying rebalance alert (awaiting yes/no)` });
     dispatch({
@@ -3215,7 +3219,7 @@ function BackOfficeStrip() {
                       letterSpacing: "0.04em",
                     }}
                   >
-                    {p.id} · {p.address} → Driver B
+                    {p.id} · {p.address} → Tomorrow
                   </span>
                 );
               })}
