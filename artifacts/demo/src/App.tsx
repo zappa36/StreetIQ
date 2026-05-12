@@ -858,7 +858,7 @@ function TopBar({
 }: {
   state: AppState;
   dispatch: React.Dispatch<Action>;
-  onRunDemo: () => void;
+  onRunDemo: (startIdx?: number) => void;
   onStopDemo: () => void;
   onReset: () => void;
 }) {
@@ -956,25 +956,29 @@ function TopBar({
         >
           Reset
         </button>
-        <button
-          data-testid="btn-sim-run"
-          onClick={onRunDemo}
-          disabled={state.isRunningDemo}
-          style={{
-            fontFamily: FONT_BODY,
-            fontSize: 12,
-            color: "#fff",
-            background: SI.accentDeep,
-            border: `1px solid ${SI.accentDeep}`,
-            padding: "5px 14px",
-            borderRadius: 4,
-            cursor: state.isRunningDemo ? "not-allowed" : "pointer",
-            opacity: state.isRunningDemo ? 0.55 : 1,
-            fontWeight: 600,
-          }}
-        >
-          ▶ Run Scripted Demo
-        </button>
+        {SCENARIOS.map((sc, i) => (
+          <button
+            key={sc.id}
+            data-testid={`btn-sim-run-${i + 1}`}
+            onClick={() => onRunDemo(i)}
+            disabled={state.isRunningDemo}
+            title={sc.title}
+            style={{
+              fontFamily: FONT_BODY,
+              fontSize: 12,
+              color: "#fff",
+              background: SI.accentDeep,
+              border: `1px solid ${SI.accentDeep}`,
+              padding: "5px 12px",
+              borderRadius: 4,
+              cursor: state.isRunningDemo ? "not-allowed" : "pointer",
+              opacity: state.isRunningDemo ? 0.55 : 1,
+              fontWeight: 600,
+            }}
+          >
+            ▶ Scenario {i + 1}
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -1636,15 +1640,18 @@ export default function App() {
     dispatch({ type: "SET_SCENARIO_GATE", payload: { idx, awaiting: true } });
   };
 
-  const handleRunDemo = () => {
+  const runSingleRef = useRef(false);
+
+  const handleRunDemo = (startIdx?: number) => {
     // Bump runId so any in-flight runner from a previous run becomes cancelled.
     demoRunIdRef.current += 1;
     clearDemoTimers();
     flushWaits();
     scriptedDemoActiveRef.current = true;
+    runSingleRef.current = typeof startIdx === "number";
     dispatch({ type: "RESET_DEMO" });
     dispatch({ type: "SET_RUNNING_DEMO", payload: true });
-    queueScenario(0);
+    queueScenario(typeof startIdx === "number" ? startIdx : 0);
   };
 
   const handleStartScenario = async () => {
@@ -1655,11 +1662,18 @@ export default function App() {
     try {
       await SCENARIO_RUNNERS[idx](myRunId);
     } finally {
-      // Only schedule the next scenario if this run is still the active one.
       if (myRunId === demoRunIdRef.current) {
-        await wait(600);
-        if (myRunId === demoRunIdRef.current) {
-          queueScenario(idx + 1);
+        if (runSingleRef.current) {
+          // Single-scenario mode: end the demo run after this one finishes.
+          scriptedDemoActiveRef.current = false;
+          runSingleRef.current = false;
+          dispatch({ type: "SET_RUNNING_DEMO", payload: false });
+          dispatch({ type: "SET_SCENARIO_GATE", payload: { idx: -1, awaiting: false } });
+        } else {
+          await wait(600);
+          if (myRunId === demoRunIdRef.current) {
+            queueScenario(idx + 1);
+          }
         }
       }
     }
