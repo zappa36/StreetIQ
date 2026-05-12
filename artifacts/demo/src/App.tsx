@@ -1724,6 +1724,8 @@ export default function App() {
     dispatch({ type: "SET_RUNNING_DEMO", payload: false });
     dispatch({ type: "SET_SCENARIO_GATE", payload: { idx: -1, awaiting: false } });
     dispatch({ type: "ADD_EVENT", payload: `Scripted demo stopped by user` });
+    // Also reset the scenario state so the next run starts from a clean board.
+    dispatch({ type: "RESET_DEMO" });
   };
 
   const handleReset = () => {
