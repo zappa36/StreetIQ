@@ -3228,7 +3228,7 @@ function PanelThree() {
     const dc = driverChip(p.driver);
     const sc = statusChip(p.status);
     const isCurrent = p.id === state.currentParcelId;
-    const isSelectable = p.driver === "Driver A" && p.status !== "delivered";
+    const isSelectable = p.driver === "Driver A";
     return (
       <tr
         key={p.id}
