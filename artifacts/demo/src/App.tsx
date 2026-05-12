@@ -229,7 +229,7 @@ const SCENARIOS: { id: string; title: string; description: string }[] = [
     id: "reroute",
     title: "Scenario 3 — Crowdsourced Road Closure",
     description:
-      "Driver A reports Maple Street is closed. StreetIQ relays the closure to Driver B and offers them an alternate route.",
+      "Driver B reports Maple Avenue is closed. StreetIQ relays the closure to Driver A and offers an alternate route that affects their stops.",
   },
 ];
 
@@ -1610,22 +1610,14 @@ export default function App() {
   const runScenarioReroute = async (runId: number) => {
     await wait(600);
     if (cancelled(runId)) return;
-    dispatch({ type: "SET_TRANSCRIPT", payload: "the road is closed on Maple Street" });
-    dispatch({ type: "SET_INTENT", payload: { intent: "road_closed", entity: "Maple Street" } });
-    dispatch({ type: "ADD_EVENT", payload: `Driver A: road_closed "Maple Street"` });
-    dispatch({ type: "ADD_EVENT", payload: `REROUTE ALERT: Generating alternate routes...` });
-    dispatch({ type: "ROAD_CLOSED_IMPACT" });
+    // Driver B reports the closure to dispatch.
+    dispatch({ type: "ADD_EVENT", payload: `Driver B → Dispatch: Maple Avenue closed for construction` });
+    dispatch({ type: "ADD_EVENT", payload: `REROUTE ALERT: Generating alternate routes for Driver A...` });
 
-    await wait(1400);
+    await wait(900);
     if (cancelled(runId)) return;
-    dispatch({ type: "SET_B_ALERT_VISIBLE", payload: true });
-    await playTtsAlert("Driver B — a colleague just reported Maple Street is closed. Want me to show an alternate route?");
-    if (cancelled(runId)) return;
-
-    await wait(1200);
-    if (cancelled(runId)) return;
-    dispatch({ type: "ADD_EVENT", payload: `Driver B accepted reroute for P004` });
-    dispatch({ type: "DRIVER_B_ACCEPT_REROUTE" });
+    // Driver A is the one impacted — fire the standard inbound notification flow.
+    triggerInboundAlert("maple_closed");
   };
 
   const SCENARIO_RUNNERS: Array<(runId: number) => Promise<void>> = [
