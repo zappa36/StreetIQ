@@ -2020,10 +2020,43 @@ function PanelOne() {
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const fallbackTimerRef = useRef<number | null>(null);
   const cycleInFlightRef = useRef(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const recorderStopTimerRef = useRef<number | null>(null);
+  const recorderSilenceTimerRef = useRef<number | null>(null);
+  const recorderAudioCtxRef = useRef<AudioContext | null>(null);
 
   const setSessionActiveBoth = (v: boolean) => {
     sessionActiveRef.current = v;
     setSessionActive(v);
+  };
+
+  const teardownRecorder = () => {
+    if (recorderStopTimerRef.current !== null) {
+      clearTimeout(recorderStopTimerRef.current);
+      recorderStopTimerRef.current = null;
+    }
+    if (recorderSilenceTimerRef.current !== null) {
+      clearInterval(recorderSilenceTimerRef.current);
+      recorderSilenceTimerRef.current = null;
+    }
+    if (mediaRecorderRef.current) {
+      try {
+        if (mediaRecorderRef.current.state !== "inactive") mediaRecorderRef.current.stop();
+      } catch { /* ignore */ }
+      mediaRecorderRef.current = null;
+    }
+    if (recorderAudioCtxRef.current) {
+      try { recorderAudioCtxRef.current.close(); } catch { /* ignore */ }
+      recorderAudioCtxRef.current = null;
+    }
+  };
+
+  const releaseMediaStream = () => {
+    if (mediaStreamRef.current) {
+      try { mediaStreamRef.current.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
+      mediaStreamRef.current = null;
+    }
   };
 
   const stopSession = (logEvent = true) => {
@@ -2045,6 +2078,8 @@ function PanelOne() {
       clearTimeout(fallbackTimerRef.current);
       fallbackTimerRef.current = null;
     }
+    teardownRecorder();
+    releaseMediaStream();
     cycleInFlightRef.current = false;
     dispatch({ type: "SET_LISTENING", payload: false });
     if (wasActive && logEvent) {
@@ -2108,6 +2143,172 @@ function PanelOne() {
       const t = window.setInterval(tick, 60);
     });
 
+  const pickRecorderMime = (): string | undefined => {
+    const MR = (typeof window !== "undefined" ? (window as Window & { MediaRecorder?: typeof MediaRecorder }).MediaRecorder : undefined);
+    if (!MR || typeof MR.isTypeSupported !== "function") return undefined;
+    const candidates = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/ogg;codecs=opus",
+      "audio/mp4;codecs=mp4a.40.2",
+      "audio/mp4",
+      "audio/aac",
+    ];
+    for (const c of candidates) {
+      try { if (MR.isTypeSupported(c)) return c; } catch { /* ignore */ }
+    }
+    return undefined;
+  };
+
+  const ensureMediaStream = async (): Promise<MediaStream | null> => {
+    if (mediaStreamRef.current && mediaStreamRef.current.getTracks().every((t) => t.readyState === "live")) {
+      return mediaStreamRef.current;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) return null;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      return stream;
+    } catch (err) {
+      console.warn("[StreetIQ] getUserMedia denied/failed", err);
+      return null;
+    }
+  };
+
+  const startMediaRecorderCycle = async () => {
+    const stream = await ensureMediaStream();
+    if (!stream) {
+      // No mic permission — gracefully end this cycle.
+      cycleInFlightRef.current = false;
+      dispatch({ type: "SET_LISTENING", payload: false });
+      return;
+    }
+    const mime = pickRecorderMime();
+    let recorder: MediaRecorder;
+    try {
+      recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    } catch (err) {
+      console.warn("[StreetIQ] MediaRecorder construction failed", err);
+      cycleInFlightRef.current = false;
+      dispatch({ type: "SET_LISTENING", payload: false });
+      return;
+    }
+    mediaRecorderRef.current = recorder;
+    const chunks: Blob[] = [];
+    let stopped = false;
+    let speechDetected = false;
+    let lastVoiceAt = Date.now();
+
+    // Silence detection via AudioContext analyser. Auto-stops 1.2s after the
+    // user finishes speaking (or after a 8s hard cap), then transcribes.
+    try {
+      const AudioCtxCtor = (window as Window & { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext }).AudioContext
+        ?? (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (AudioCtxCtor) {
+        const ctx = new AudioCtxCtor();
+        recorderAudioCtxRef.current = ctx;
+        const src = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 1024;
+        src.connect(analyser);
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        const SPEECH_RMS = 0.04;
+        const SILENCE_AFTER_MS = 1200;
+        recorderSilenceTimerRef.current = window.setInterval(() => {
+          analyser.getByteTimeDomainData(data);
+          let sum = 0;
+          for (let i = 0; i < data.length; i++) {
+            const v = (data[i] - 128) / 128;
+            sum += v * v;
+          }
+          const rms = Math.sqrt(sum / data.length);
+          if (rms > SPEECH_RMS) {
+            speechDetected = true;
+            lastVoiceAt = Date.now();
+          } else if (speechDetected && Date.now() - lastVoiceAt > SILENCE_AFTER_MS) {
+            try { if (recorder.state !== "inactive") recorder.stop(); } catch { /* ignore */ }
+          }
+        }, 100);
+      }
+    } catch (err) {
+      console.warn("[StreetIQ] silence detection unavailable", err);
+    }
+
+    recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
+    recorder.onstop = async () => {
+      if (stopped) return;
+      stopped = true;
+      if (recorderSilenceTimerRef.current !== null) {
+        clearInterval(recorderSilenceTimerRef.current);
+        recorderSilenceTimerRef.current = null;
+      }
+      if (recorderStopTimerRef.current !== null) {
+        clearTimeout(recorderStopTimerRef.current);
+        recorderStopTimerRef.current = null;
+      }
+      if (recorderAudioCtxRef.current) {
+        try { recorderAudioCtxRef.current.close(); } catch { /* ignore */ }
+        recorderAudioCtxRef.current = null;
+      }
+      mediaRecorderRef.current = null;
+      dispatch({ type: "SET_LISTENING", payload: false });
+
+      const blob = new Blob(chunks, { type: mime ?? recorder.mimeType ?? "audio/webm" });
+      const minBytes = 800; // ignore empty/click-only recordings
+      if (!speechDetected || blob.size < minBytes) {
+        cycleInFlightRef.current = false;
+        if (sessionActiveRef.current && continuousModeRef.current) {
+          await waitWhileSpeaking();
+          await new Promise((r) => setTimeout(r, 250));
+          if (sessionActiveRef.current && continuousModeRef.current) startRecognitionCycle();
+        }
+        return;
+      }
+
+      try {
+        const res = await fetch("/api/transcribe", {
+          method: "POST",
+          headers: { "Content-Type": blob.type || "audio/webm" },
+          body: blob,
+        });
+        if (res.ok) {
+          const data = await res.json() as { text?: string };
+          const text = (data.text ?? "").trim();
+          console.log("[StreetIQ] transcribe", { bytes: blob.size, type: blob.type, text });
+          if (text.length > 0) {
+            dispatch({ type: "SET_TRANSCRIPT", payload: text });
+            await routeTranscript(text);
+          }
+        } else {
+          console.warn("[StreetIQ] /api/transcribe failed", res.status);
+        }
+      } catch (err) {
+        console.warn("[StreetIQ] transcribe error", err);
+      }
+
+      cycleInFlightRef.current = false;
+      if (sessionActiveRef.current && continuousModeRef.current) {
+        await waitWhileSpeaking();
+        await new Promise((r) => setTimeout(r, 350));
+        if (sessionActiveRef.current && continuousModeRef.current) startRecognitionCycle();
+      }
+    };
+
+    try {
+      recorder.start(250);
+    } catch (err) {
+      console.warn("[StreetIQ] recorder.start failed", err);
+      teardownRecorder();
+      cycleInFlightRef.current = false;
+      dispatch({ type: "SET_LISTENING", payload: false });
+      return;
+    }
+    // Hard cap so a stuck cycle can't run forever.
+    recorderStopTimerRef.current = window.setTimeout(() => {
+      try { if (recorder.state !== "inactive") recorder.stop(); } catch { /* ignore */ }
+    }, 8000);
+  };
+
   const startRecognitionCycle = () => {
     // Single-flight: never start a new cycle while one is in flight.
     if (cycleInFlightRef.current) return;
@@ -2167,24 +2368,10 @@ function PanelOne() {
         };
         recognition.start();
       } else {
-        fallbackTimerRef.current = window.setTimeout(async () => {
-          fallbackTimerRef.current = null;
-          const pending = followUpRef.current;
-          let fallback: string;
-          if (pending?.type === "delay_details") fallback = "about 15 minutes, heavy traffic";
-          else if (pending?.type === "ahead_details") fallback = "about 10 minutes, light traffic";
-          else if (pending?.type === "confirm_navigation") fallback = "yes please";
-          else fallback = "I will be delayed for the next parcel";
-          dispatch({ type: "SET_TRANSCRIPT", payload: fallback });
-          dispatch({ type: "SET_LISTENING", payload: false });
-          await routeTranscript(fallback);
-          cycleInFlightRef.current = false;
-          if (sessionActiveRef.current && continuousModeRef.current) {
-            await waitWhileSpeaking();
-            await new Promise((r) => setTimeout(r, 350));
-            if (sessionActiveRef.current && continuousModeRef.current) startRecognitionCycle();
-          }
-        }, 2000);
+        // Browsers without Web Speech API (notably macOS Safari): record the
+        // mic with MediaRecorder, send the audio to /api/transcribe (Whisper),
+        // and feed the returned transcript back into the same routing path.
+        startMediaRecorderCycle();
       }
     } catch {
       cycleInFlightRef.current = false;

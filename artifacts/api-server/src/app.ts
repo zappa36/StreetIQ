@@ -77,6 +77,7 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use("/api/classify", aiRateLimit, requireApiKey);
 app.use("/api/tts", aiRateLimit, requireApiKey);
+app.use("/api/transcribe", aiRateLimit, requireApiKey);
 
 app.use("/api", router);
 
