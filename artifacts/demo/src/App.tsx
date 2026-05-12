@@ -905,18 +905,6 @@ function TopBar({
       <span style={{ fontFamily: FONT_HEAD, fontSize: 16, fontWeight: 600, color: SI.ink, letterSpacing: "-0.01em" }}>
         StreetIQ
       </span>
-      <span
-        style={{
-          fontFamily: FONT_MONO,
-          fontSize: 10,
-          color: SI.inkFaint,
-          letterSpacing: "0.18em",
-          fontWeight: 600,
-        }}
-      >
-        VOICE COPILOT · DEMO
-      </span>
-
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: 24 }}>
         <span style={{ fontFamily: FONT_MONO, fontSize: 10, color: SI.inkFaint, letterSpacing: "0.14em" }}>DRIVER A</span>
         {(["Approaching", "Parked"] as DriverState[]).map((s) => (
