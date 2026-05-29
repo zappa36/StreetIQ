@@ -1084,11 +1084,11 @@ export default function App() {
         dispatch({ type: "SET_MAP_VISIBLE", payload: false });
         dispatch({ type: "ADD_EVENT", payload: `Driver A parked → ${target.id} marked delivered` });
         playTtsAlert(
-          `You've arrived at ${target.address}. I've marked ${target.id} as delivered. I'll also record this parking location to help build our parking hotspots. Nice work.`
+          `You've arrived at ${target.address}. ${target.id} delivered. Looks like a solid spot — I'll save it to the parking map for your colleagues.`
         );
       } else {
         dispatch({ type: "ADD_EVENT", payload: `Driver A parked` });
-        playTtsAlert(`You've arrived. All deliveries are complete — nice work.`);
+        playTtsAlert(`You've arrived. That's every stop complete — you're clear for the day.`);
       }
     }
     prevDriverAStateRef.current = state.driverAState;
@@ -1396,7 +1396,7 @@ export default function App() {
           dispatch({ type: "APPLY_AHEAD", payload: { parcelId: target.id, minutes: extras.minutes, reason: extras.reason } });
           dispatch({ type: "SET_INTENT", payload: { intent: "ahead_reported", entity: `${target.id} −${extras.minutes}min · ${extras.reason}` } });
           dispatch({ type: "ADD_EVENT", payload: `Driver A: ${target.id} ahead −${extras.minutes}min — ${extras.reason}` });
-          playTtsAlert(`Nice. ${target.id} on ${target.address} pulled forward ${extras.minutes} minutes — ${extras.reason}.`);
+          playTtsAlert(`Got it — ${target.id} on ${target.address} is now ${extras.minutes} minutes ahead, ${extras.reason}. You've got a little slack before your next stop.`);
         } else {
           const missing: string[] = [];
           if (typeof extras.minutes !== "number") missing.push("how many minutes");
@@ -1412,7 +1412,7 @@ export default function App() {
             payload: { type: "ahead_details", parcelId: target.id, parcelLabel: label, question, knownMinutes: extras.minutes ?? null, knownReason: extras.reason ?? null },
           });
           dispatch({ type: "ADD_EVENT", payload: `Driver A: ahead_reported for ${target.id} (${target.address})` });
-          playTtsAlert(`Nice. For ${target.address}, ${question}`);
+          playTtsAlert(`Got it. For ${target.address}, ${question}`);
         }
       } else {
         dispatch({ type: "ADD_EVENT", payload: `Driver A: ahead_reported but no matching parcel found` });
@@ -2532,7 +2532,7 @@ function PanelOne() {
     dispatch({ type: "APPLY_DELAY", payload: { parcelId: pending.parcelId, minutes, reason } });
     dispatch({ type: "ADD_EVENT", payload: `Driver A: ${pending.parcelId} delayed +${minutes}min — ${reason}` });
     dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
-    await playTtsAlert("OK, thanks. I'll send it to the back office.");
+    await playTtsAlert(`Got it — dispatch knows ${pending.parcelLabel} will be ${minutes} minutes late for ${reason}.`);
   };
 
   const handleAheadDetails = async (text: string, pending: Extract<PendingFollowUp, { type: "ahead_details" }>) => {
@@ -2594,7 +2594,7 @@ function PanelOne() {
         payload: { type: "ahead_details", parcelId: pending.parcelId, parcelLabel: pending.parcelLabel, question: q, knownMinutes: minutes, knownReason: null, reasonAsked: true, minutesAsked: pending.minutesAsked || true },
       });
       dispatch({ type: "ADD_EVENT", payload: `Otto: follow-up — asking for reason on ${pending.parcelId}` });
-      await playTtsAlert(`Nice, ${minutes} minutes ahead. What's helping you run ahead?`);
+      await playTtsAlert(`Got it, ${minutes} minutes ahead. What's helping you run ahead?`);
       return;
     }
     if ((reason === "running ahead" || reason === "unspecified") && pending.reasonAsked) {
@@ -2605,7 +2605,7 @@ function PanelOne() {
     dispatch({ type: "APPLY_AHEAD", payload: { parcelId: pending.parcelId, minutes, reason } });
     dispatch({ type: "ADD_EVENT", payload: `Driver A: ${pending.parcelId} ahead −${minutes}min — ${reason}` });
     dispatch({ type: "CLEAR_PENDING_FOLLOWUP" });
-    await playTtsAlert("Great, thanks. I'll let dispatch know you're ahead of schedule.");
+    await playTtsAlert(`Got it — dispatch knows ${pending.parcelLabel} is ${minutes} minutes ahead. That frees up a little time before your next stop.`);
   };
 
   // Robust local parser used as fallback when the AI is unavailable or returns
